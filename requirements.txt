@@ -5,3 +5,4 @@ scipy: 1.13.1
 soundfile: 0.13.1
 matplotlib: 3.9.4
 tensorboard: 2.19.0
+pandas: 2.3.0+4.g1dfc98e16a
