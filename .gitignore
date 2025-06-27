@@ -54,6 +54,8 @@ build/
 *.pth
 *.pb
 *.csv
+*.json
+
 
 midi_output/
 output/
