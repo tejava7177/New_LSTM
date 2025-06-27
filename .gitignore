@@ -1,0 +1,61 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+
+# Conda environments
+.env/
+.venv/
+*.env
+*.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# VSCode
+.vscode/
+
+# MacOS
+.DS_Store
+
+# Logs and outputs
+*.log
+*.out
+*.tmp
+
+# Python egg
+*.egg
+*.egg-info/
+dist/
+build/
+*.manifest
+*.spec
+
+# PyInstaller
+*.exe
+*.dll
+*.pkg
+*.deb
+
+# Audio/ML related
+*.npy
+*.npz
+*.h5
+*.ckpt
+*.pt
+*.pth
+*.pb
+*.csv
+
+midi_output/
+output/
+results/
+
