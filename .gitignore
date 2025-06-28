@@ -61,3 +61,5 @@ midi_output/
 output/
 results/
 
+*.xml
+*.mid
