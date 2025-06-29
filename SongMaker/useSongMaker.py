@@ -1,76 +1,52 @@
-import os
 from ai_song_maker.score_helper import process_and_output_score
 
-# 📌 코드 구성음 매핑 (기초적 triad 구성, 필요 시 확장 가능)
-chord_notes = {
-    "C": ["C4", "E4", "G4"],
-    "G": ["G3", "B3", "D4"],
-    "Am": ["A3", "C4", "E4"],
-    "F": ["F3", "A3", "C4"],
-    "D": ["D4", "F#4", "A4"],
-    "Em": ["E3", "G3", "B3"],
-    "Dm": ["D4", "F4", "A4"],
-    "E": ["E3", "G#3", "B3"],
-    "A": ["A3", "C#4", "E4"],
-    "Bm": ["B3", "D4", "F#4"],
-    "B": ["B3", "D#4", "F#4"]
-    # 필요에 따라 추가
+# 코드 진행
+predicted_chords = ["C", "G", "Am", "F", "C", "G", "F", "C"]
+
+# 코드별 4분음표 아르페지오 패턴
+chord_patterns = {
+    "C": ["C4", "E4", "G4", "E4"],
+    "G": ["G3", "B3", "D4", "B3"],
+    "Am": ["A3", "C4", "E4", "C4"],
+    "F": ["F3", "A3", "C4", "A3"]
 }
 
-# 🎹 코드 진행 → parts_data 변환 함수
-def generate_parts_data_from_chords(chords):
-    melodies = []
-    beat_ends = []
-    beat = 0.0
-
-    for chord in chords:
-        notes = chord_notes.get(chord, [])
-        for note in notes:
-            melodies.append(note)
-            beat_ends.append(beat + 1.0)  # 한 박자 유지
-        beat += 1.0  # 마디 넘기기
-
-    return {
-        "Piano": {
-            "instrument": "Piano",
-            "melodies": melodies,
-            "beat_ends": beat_ends,
-            "dynamics": ['mf'] * len(melodies),
-            "lyrics": [''] * len(melodies),
-        }
+parts_data = {
+    "Piano": {
+        "instrument": "Piano",
+        "melodies": [],
+        "beat_ends": [],
+        "dynamics": [],
+        "lyrics": []
     }
+}
 
-# 🔄 MIDI 출력 경로 설정
-def get_output_paths(filename="rock_sample"):
-    base_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi"
-    os.makedirs(base_path, exist_ok=True)
-    return {
-        "musicxml": os.path.join(base_path, f"{filename}.xml"),
-        "midi": os.path.join(base_path, f"{filename}.mid"),
-        "html": os.path.join(base_path, f"{filename}.html")
-    }
+current_beat = 0.0
+for chord in predicted_chords:
+    notes = chord_patterns.get(chord, ["C4", "E4", "G4", "E4"])
+    for note_name in notes:
+        duration = 1.0  # 4분음표
+        parts_data["Piano"]["melodies"].append(note_name)   # **여기서는 문자열만**
+        current_beat += duration
+        parts_data["Piano"]["beat_ends"].append(current_beat)
+        parts_data["Piano"]["dynamics"].append("mf")
+        parts_data["Piano"]["lyrics"].append("")
 
-# 🎯 메인 실행부
-if __name__ == "__main__":
-    # 예시 코드 진행 (예측된 결과로 대체 가능)
-    predicted_chords = ["C", "G", "Am", "F", "C", "G", "F", "C"]
+score_data = {
+    'key': 'C',
+    'time_signature': '4/4',
+    'tempo': 120,
+    'clef': 'treble'
+}
 
-    # 변환 및 출력
-    parts_data = generate_parts_data_from_chords(predicted_chords)
-    score_data = {
-        "tempo": 120,
-        "beats_per_measure": 4
-    }
-    paths = get_output_paths("rock_sample")
+output_musicxml_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi/rock_sample.xml"
+output_midi_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi/rock_sample.mid"
 
-    # 🛠️ SongMaker 기반 MIDI 생성
-    process_and_output_score(
-        parts_data,
-        score_data,
-        musicxml_path=paths["musicxml"],
-        midi_path=paths["midi"],
-        show_html=False,
-        sheet_music_html_path=paths["html"]
-    )
-
-    print(f"✅ MIDI 생성 완료! 경로: {paths['midi']}")
+# MIDI/XML 생성
+process_and_output_score(
+    parts_data,
+    score_data,
+    musicxml_path=output_musicxml_path,
+    midi_path=output_midi_path,
+    show_html=False
+)
