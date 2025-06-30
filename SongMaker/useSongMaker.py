@@ -18,6 +18,13 @@ parts_data = {
         "beat_ends": [],
         "dynamics": [],
         "lyrics": []
+    },
+    "Guitar": {
+        "instrument": "AcousticGuitar",  # 또는 "AcousticGuitar"
+        "melodies": [],
+        "beat_ends": [],
+        "dynamics": [],
+        "lyrics": []
     }
 }
 
@@ -26,11 +33,17 @@ for chord in predicted_chords:
     notes = chord_patterns.get(chord, ["C4", "E4", "G4", "E4"])
     for note_name in notes:
         duration = 1.0  # 4분음표
-        parts_data["Piano"]["melodies"].append(note_name)   # **여기서는 문자열만**
+        # Piano
+        parts_data["Piano"]["melodies"].append(note_name)
+        # Guitar (같은 음)
+        parts_data["Guitar"]["melodies"].append(note_name)
         current_beat += duration
         parts_data["Piano"]["beat_ends"].append(current_beat)
+        parts_data["Guitar"]["beat_ends"].append(current_beat)
         parts_data["Piano"]["dynamics"].append("mf")
+        parts_data["Guitar"]["dynamics"].append("mf")
         parts_data["Piano"]["lyrics"].append("")
+        parts_data["Guitar"]["lyrics"].append("")
 
 score_data = {
     'key': 'C',
@@ -42,7 +55,6 @@ score_data = {
 output_musicxml_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi/rock_sample.xml"
 output_midi_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi/rock_sample.mid"
 
-# MIDI/XML 생성
 process_and_output_score(
     parts_data,
     score_data,
