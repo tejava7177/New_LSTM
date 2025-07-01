@@ -1,5 +1,13 @@
 from music21 import instrument
+import sys
 
+# SongMaker 및 drumPattern 경로 추가
+sys.path.append('/Users/simjuheun/Desktop/myProject/New_LSTM/SongMaker')
+
+from ai_song_maker.score_helper import process_and_output_score
+from drumPattern.randomDrumPattern import generate_random_drum_pattern
+
+# ====== 코드 진행 ======
 predicted_chords = ["C", "G", "Am", "F", "C", "G", "F", "C"]
 num_bars = len(predicted_chords)
 
@@ -19,7 +27,7 @@ parts_data = {
         "lyrics": []
     },
     "Drums": {
-        "instrument": instrument.SnareDrum(),  # 또는 "Percussion" (문자열, 내부에서 클래스로 변환됨)
+        "instrument": instrument.SnareDrum(),
         "melodies": [],
         "beat_ends": [],
         "dynamics": [],
@@ -27,7 +35,7 @@ parts_data = {
     }
 }
 
-# 1. 피아노/기타: 이전 코드처럼 작성 (아르페지오/화음)
+# 피아노/기타 - 고정 패턴
 chord_patterns_piano = {
     "C": ["C4", "E4", "G4", "E4"],
     "G": ["G3", "B3", "D4", "B3"],
@@ -43,37 +51,29 @@ chord_patterns_guitar = {
 
 current_beat = 0.0
 for chord in predicted_chords:
-    # 피아노(아르페지오)
-    piano_notes = chord_patterns_piano.get(chord, ["C4", "E4", "G4", "E4"])
-    for note_name in piano_notes:
+    # 피아노: 4음
+    for note_name in chord_patterns_piano.get(chord, ["C4", "E4", "G4", "E4"]):
         duration = 1.0
         parts_data["Piano"]["melodies"].append(note_name)
         current_beat += duration
         parts_data["Piano"]["beat_ends"].append(current_beat)
         parts_data["Piano"]["dynamics"].append("mf")
         parts_data["Piano"]["lyrics"].append("")
-    # 기타(화음)
-    guitar_chord = chord_patterns_guitar.get(chord, ["C3", "E3", "G3"])
-    parts_data["Guitar"]["melodies"].append(guitar_chord)
+    # 기타: 1마디(4박)마다 화음
+    parts_data["Guitar"]["melodies"].append(chord_patterns_guitar.get(chord, ["C3", "E3", "G3"]))
     parts_data["Guitar"]["beat_ends"].append(current_beat)
     parts_data["Guitar"]["dynamics"].append("mf")
     parts_data["Guitar"]["lyrics"].append("")
 
-# 2. 드럼 트랙: 8마디 반복 패턴 (4/4, 4분음표 4개씩)
-drum_pattern = [
-    ("C2", 1.0),   # 1박 Kick
-    ("F#2", 1.0),  # 2박 HiHat
-    ("D2", 1.0),   # 3박 Snare
-    ("F#2", 1.0)   # 4박 HiHat
-]
-drum_total_beat = 0.0
-for _ in range(num_bars):
-    for pitch, dur in drum_pattern:
-        parts_data["Drums"]["melodies"].append(pitch)
-        drum_total_beat += dur
-        parts_data["Drums"]["beat_ends"].append(drum_total_beat)
-        parts_data["Drums"]["dynamics"].append("mf")
-        parts_data["Drums"]["lyrics"].append("")
+# 🥁 드럼: 랜덤 패턴 생성 (여기서 적용!)
+# 드럼 패턴 생성 (한 번만!)
+drum_melodies, drum_beat_ends, drum_dynamics, drum_lyrics = generate_random_drum_pattern(measures=num_bars)
+
+# parts_data에 그대로 할당
+parts_data["Drums"]["melodies"] = drum_melodies
+parts_data["Drums"]["beat_ends"] = drum_beat_ends
+parts_data["Drums"]["dynamics"] = drum_dynamics
+parts_data["Drums"]["lyrics"] = drum_lyrics
 
 score_data = {
     'key': 'C',
@@ -85,8 +85,6 @@ score_data = {
 output_musicxml_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi/rock_sample.xml"
 output_midi_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi/rock_sample.mid"
 
-from ai_song_maker.score_helper import process_and_output_score
-
 process_and_output_score(
     parts_data,
     score_data,
@@ -94,3 +92,5 @@ process_and_output_score(
     midi_path=output_midi_path,
     show_html=False
 )
+
+print("✅ 랜덤 드럼패턴 포함 합주 MIDI, MusicXML 생성 완료!")
