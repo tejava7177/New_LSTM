@@ -6,6 +6,7 @@ sys.path.append('/Users/simjuheun/Desktop/myProject/New_LSTM/SongMaker')
 
 from ai_song_maker.score_helper import process_and_output_score
 from drumPattern.randomDrumPattern import generate_random_drum_pattern
+from GuitarPattern.randomGuitarPattern import generate_random_guitar_pattern
 
 # ====== 코드 진행 ======
 predicted_chords = ["C", "G", "Am", "F", "C", "G", "F", "C"]
@@ -80,6 +81,16 @@ score_data = {
     'time_signature': '4/4',
     'tempo': 120,
     'clef': 'treble'
+}
+
+rand_gtr_mel, rand_gtr_beats, rand_gtr_dyn, rand_gtr_lyr = generate_random_guitar_pattern(predicted_chords)
+
+parts_data["RandomGuitar"] = {
+    "instrument": "ElectricGuitar",  # 혹은 "ElectricGuitar" 등으로도 가능
+    "melodies": rand_gtr_mel,
+    "beat_ends": rand_gtr_beats,
+    "dynamics": rand_gtr_dyn,
+    "lyrics": rand_gtr_lyr
 }
 
 output_musicxml_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi/rock_sample.xml"
