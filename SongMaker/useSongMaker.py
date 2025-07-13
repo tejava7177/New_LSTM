@@ -93,6 +93,7 @@ parts_data["RandomGuitar"] = {
     "lyrics": rand_gtr_lyr
 }
 
+#파일 생성
 output_musicxml_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi/rock_sample.xml"
 output_midi_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi/rock_sample.mid"
 
