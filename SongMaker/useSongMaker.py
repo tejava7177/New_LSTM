@@ -5,12 +5,17 @@ import sys
 sys.path.append('/Users/simjuheun/Desktop/myProject/New_LSTM/SongMaker')
 
 from ai_song_maker.score_helper import process_and_output_score
-from drumPattern.randomDrumPattern import generate_random_drum_pattern
+from DrumPattern.randomDrumPattern import generate_random_drum_pattern
 from GuitarPattern.randomGuitarPattern import generate_random_guitar_pattern
+from PianoPattern.randomPianoRhythm import generate_random_piano_rhythms
 
 # ====== 코드 진행 ======
 predicted_chords = ["C", "G", "Am", "F", "C", "G", "F", "C"]
 num_bars = len(predicted_chords)
+
+# 🎹 1. 피아노 리듬 랜덤 패턴
+piano_rhythms = generate_random_piano_rhythms(num_bars)
+
 
 parts_data = {
     "Piano": {
@@ -51,15 +56,18 @@ chord_patterns_guitar = {
 }
 
 current_beat = 0.0
-for chord in predicted_chords:
-    # 피아노: 4음
-    for note_name in chord_patterns_piano.get(chord, ["C4", "E4", "G4", "E4"]):
-        duration = 1.0
+for bar_idx, chord in enumerate(predicted_chords):
+    notes = chord_patterns_piano.get(chord, ["C4", "E4", "G4", "E4"])
+    rhythm_for_this_bar = piano_rhythms[bar_idx]
+    note_idx = 0
+    for dur in rhythm_for_this_bar:
+        note_name = notes[note_idx % len(notes)]
         parts_data["Piano"]["melodies"].append(note_name)
-        current_beat += duration
+        current_beat += dur
         parts_data["Piano"]["beat_ends"].append(current_beat)
         parts_data["Piano"]["dynamics"].append("mf")
         parts_data["Piano"]["lyrics"].append("")
+        note_idx += 1
     # 기타: 1마디(4박)마다 화음
     parts_data["Guitar"]["melodies"].append(chord_patterns_guitar.get(chord, ["C3", "E3", "G3"]))
     parts_data["Guitar"]["beat_ends"].append(current_beat)
