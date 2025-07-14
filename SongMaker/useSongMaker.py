@@ -8,6 +8,7 @@ from ai_song_maker.score_helper import process_and_output_score
 from DrumPattern.randomDrumPattern import generate_random_drum_pattern
 from GuitarPattern.randomGuitarPattern import generate_random_guitar_pattern
 from PianoPattern.randomPianoRhythm import generate_random_piano_rhythms
+from GuitarPattern.randomGuitarSoloPattern import random_guitar_solo_pattern
 
 # ====== 코드 진행 ======
 predicted_chords = ["C", "G", "Am", "F", "C", "G", "F", "C"]
@@ -99,6 +100,18 @@ parts_data["RandomGuitar"] = {
     "beat_ends": rand_gtr_beats,
     "dynamics": rand_gtr_dyn,
     "lyrics": rand_gtr_lyr
+}
+
+
+# 예시: 키/스케일은 C/major, 코드 수 만큼 솔로 생성
+solo_mel, solo_beats, solo_dyn, solo_lyr = random_guitar_solo_pattern(num_bars=len(predicted_chords), key="C", scale_type="major")
+
+parts_data["GuitarSolo"] = {
+    "instrument": "ElectricGuitar",
+    "melodies": solo_mel,
+    "beat_ends": solo_beats,
+    "dynamics": solo_dyn,
+    "lyrics": solo_lyr
 }
 
 #파일 생성
