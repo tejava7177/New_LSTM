@@ -1,90 +1,88 @@
-import sys
+# SongMaker/useSongMaker.py
+import sys, os, random
 sys.path.append('/Users/simjuheun/Desktop/myProject/New_LSTM/SongMaker')
 
 from ai_song_maker.score_helper import process_and_output_score
-from instruments.gm_instruments import get_rock_band_instruments
-from Patterns_Rock.Drum.randomDrumPattern import generate_random_drum_pattern
+from instruments.gm_instruments       import get_rock_band_instruments
+from Patterns_Rock.Drum.randomDrumPattern   import generate_random_drum_pattern
 from Patterns_Rock.Guitar.randomGuitarPattern import generate_random_guitar_pattern
-from Patterns_Rock.Piano.randomPianoRhythm import generate_random_piano_rhythms
+from Patterns_Rock.Piano.randomPianoRhythm    import generate_random_piano_rhythms
+from utils.humanize                  import humanize_melody
+from utils.debug_utils import inspect_beats
 
-# 1. 코드 진행 예시
+# ─────────────────────────── 입력 코드 진행 ───────────────────────────
 predicted_chords = ["C", "G", "Am", "F", "C", "G", "F", "C"]
-num_bars = len(predicted_chords)
+num_bars         = len(predicted_chords)
+insts            = get_rock_band_instruments()                # GM 번호 → Instrument
 
-# 2. 악기 세팅
-insts = get_rock_band_instruments()
+# ── 1) Piano (신스 역할)
+p_m, p_b, _, _   = generate_random_piano_rhythms(predicted_chords, pattern="arpeggio")
+p_m, p_b, p_vel  = humanize_melody(p_m, p_b,
+                                   len_jitter=0.10, vel_base=72,
+                                   vel_jitter=8,  rest_prob=0.10)
+p_dyn            = ["mf" if v > 75 else "mp" for v in p_vel]
+p_lyr            = [""] * len(p_m)
 
-# 3. 피아노 패턴 생성 (아르페지오 리듬)
-piano_mel, piano_beat, piano_dyn, piano_lyr = generate_random_piano_rhythms(
-    predicted_chords,
-    allowed_durations=[0.25, 0.5, 1.0, 1.5, 2.0],  # 리듬 다양화
-    pattern="arpeggio"  # "arpeggio" or "block"
+# ── 2) Rhythm Guitar
+g_m, g_b, _, _   = generate_random_guitar_pattern(predicted_chords, pattern="random")
+g_m, g_b, g_vel  = humanize_melody(g_m, g_b,
+                                   len_jitter=0.08, vel_base=82,
+                                   vel_jitter=10, rest_prob=0.05)
+g_dyn            = ["f" if v > 88 else "mf" for v in g_vel]
+g_lyr            = [""] * len(g_m)
+
+# ── 3) Drums
+# --- 3) Drums
+d_m, d_b, d_d, d_l = generate_random_drum_pattern(
+    measures=num_bars,
+    style=random.choice(["rock8", "rock16", "halfTime"]),
+    fill_prob=0.08
 )
-
-# 4. 기타 패턴 생성 (랜덤: 스트로크/아르페지오 믹스)
-gtr_mel, gtr_beat, gtr_dyn, gtr_lyr = generate_random_guitar_pattern(
-    predicted_chords,
-    beats_per_bar=4,  # 한 마디 4박 기준
-    pattern="random"  # "arpeggio" or "strum" or "random"
-)
-
-# 5. 드럼 패턴 생성 (랜덤)
-drum_mel, drum_beat, drum_dyn, drum_lyr = generate_random_drum_pattern(
-    measures=num_bars, beats_per_measure=4
-)
-
-# (디버깅용) -- 실제로 길이 맞는지 체크!
-print("== piano_mel ==", piano_mel)
-print("== piano_beat ==", piano_beat)
-print("== gtr_mel ==", gtr_mel)
-print("== gtr_beat ==", gtr_beat)
-print("== drum_mel ==", drum_mel)
-print("== drum_beat ==", drum_beat)
-print("피아노 길이:", len(piano_mel), len(piano_beat))
-print("기타 길이:", len(gtr_mel), len(gtr_beat))
-print("드럼 길이:", len(drum_mel), len(drum_beat))
-
-# 6. parts_data 구성 (각 파트별 배열 반드시 길이 일치해야 함)
+# ───────────────────────── parts_data 조립 ────────────────────────────
 parts_data = {
-    "Synth": {   # 피아노 대신 신디로 명명
-        "instrument": insts['synth'],
-        "melodies": piano_mel,
-        "beat_ends": piano_beat,
-        "dynamics": piano_dyn,
-        "lyrics": piano_lyr
+    "Synth": {
+        "instrument": insts["synth"],       # GM 81 (Lead 1 Square or 비슷)
+        "melodies" : p_m,
+        "beat_ends": p_b,
+        "dynamics" : p_dyn,
+        "lyrics"   : p_lyr
     },
     "RhythmGuitar": {
-        "instrument": insts['elec_guitar'],
-        "melodies": gtr_mel,
-        "beat_ends": gtr_beat,
-        "dynamics": gtr_dyn,
-        "lyrics": gtr_lyr
+        "instrument": insts["elec_guitar"], # GM 30 (Overdrive Guitar)
+        "melodies" : g_m,
+        "beat_ends": g_b,
+        "dynamics" : g_dyn,
+        "lyrics"   : g_lyr
     },
     "Drums": {
-        "instrument": insts['drum'],
-        "melodies": drum_mel,
-        "beat_ends": drum_beat,
-        "dynamics": drum_dyn,
-        "lyrics": drum_lyr
-    }
+    "instrument": insts["drum"],   # SnareDrum / channel 10
+    "melodies" : d_m,
+    "beat_ends": d_b,
+    "dynamics" : d_d,   # ← 수정: d_dyn → d_d
+    "lyrics"   : d_l    # ← 수정: d_lyr → d_l
+}
 }
 
 score_data = {
-    'key': 'C',
-    'time_signature': '4/4',
-    'tempo': 120,
-    'clef': 'treble'
+    "key": "C",
+    "time_signature": "4/4",
+    "tempo": 120,
+    "clef": "treble"
 }
 
-output_musicxml_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi/rock_sample.xml"
-output_midi_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi/rock_sample.mid"
+# inspect_beats("Synth", p_b)
+# inspect_beats("RhythmGuitar", g_b)
+# inspect_beats("Drums", d_b)
 
-process_and_output_score(
-    parts_data,
-    score_data,
-    musicxml_path=output_musicxml_path,
-    midi_path=output_midi_path,
-    show_html=False
-)
+out_dir = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_midi"
+os.makedirs(out_dir, exist_ok=True)
+musicxml_path = f"{out_dir}/rock_sample.xml"
+midi_path     = f"{out_dir}/rock_sample.mid"
 
-print("✅ 합주 MIDI/MusicXML 생성 완료!")
+process_and_output_score(parts_data,
+                         score_data,
+                         musicxml_path=musicxml_path,
+                         midi_path=midi_path,
+                         show_html=False)
+
+print("✅ Humanized MIDI / MusicXML 생성 완료!")
