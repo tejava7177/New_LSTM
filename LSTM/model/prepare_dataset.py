@@ -28,7 +28,7 @@ def load_and_prepare_dataset(json_path, window_size=3):
 
 if __name__ == "__main__":
     # 경로 설정
-    json_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_chords_rich_normalized.json"
+    json_path = "/LSTM/cli/data/rock_midi/rock_chords_rich_normalized.json"
     save_dir = "./LSTM/model"
     os.makedirs(save_dir, exist_ok=True)
 

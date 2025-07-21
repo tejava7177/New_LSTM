@@ -2,7 +2,7 @@ import json
 import re
 
 input_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_chords_cleaned_no_tag.json"
-output_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/rock_chords_rich_normalized.json"
+output_path = "/LSTM/cli/data/rock_midi/rock_chords_rich_normalized.json"
 
 def normalize_chord(chord):
     chord = chord.split('/')[0]
