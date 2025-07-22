@@ -20,7 +20,7 @@ class ChordLSTM(nn.Module):
 
 if __name__ == '__main__':
     # 경로
-    model_dir = "./LSTM/model"
+    model_dir = "./LSTM/model/jazz"
     X = np.load(os.path.join(model_dir, "X.npy"))
     y = np.load(os.path.join(model_dir, "y.npy"))
     chord_to_index = np.load(os.path.join(model_dir, "chord_to_index.npy"), allow_pickle=True).item()

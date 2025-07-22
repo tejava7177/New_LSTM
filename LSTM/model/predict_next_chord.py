@@ -3,7 +3,7 @@ import numpy as np
 import os
 from train_lstm import ChordLSTM
 
-BASE_DIR = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model"
+BASE_DIR = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/jazz"
 
 chord_to_index = np.load(os.path.join(BASE_DIR, "chord_to_index.npy"), allow_pickle=True).item()
 index_to_chord = np.load(os.path.join(BASE_DIR, "index_to_chord.npy"), allow_pickle=True).item()
