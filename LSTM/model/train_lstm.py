@@ -20,7 +20,7 @@ class ChordLSTM(nn.Module):
 
 if __name__ == '__main__':
     # 경로
-    model_dir = "./LSTM/model/jazz"
+    model_dir = "./LSTM/model/pop"
     X = np.load(os.path.join(model_dir, "X.npy"))
     y = np.load(os.path.join(model_dir, "y.npy"))
     chord_to_index = np.load(os.path.join(model_dir, "chord_to_index.npy"), allow_pickle=True).item()
@@ -36,7 +36,7 @@ if __name__ == '__main__':
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    num_epochs = 20
+    num_epochs = 40
     batch_size = 128
 
     for epoch in range(num_epochs):

@@ -6,7 +6,8 @@ def load_and_prepare_dataset(json_path, window_size=3):
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     #progressions = data["rock_chord_progressions"]   락 장르 생성
-    progressions = data["jazz_chord_progressions"]
+    #progressions = data["jazz_chord_progressions"]
+    progressions = data["pop_chord_progressions"]
 
     # 전체 코드 사전 만들기
     all_chords = []
@@ -32,9 +33,10 @@ if __name__ == "__main__":
     # 락 경로
     #json_path = "/LSTM/cli/data/rock_midi/rock_chords_rich_normalized.json"
     #재즈 경로
-    json_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/jazz_midi/jazz_chords_cleaned.json"
+    #json_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/jazz_midi/jazz_chords_cleaned.json"
+    json_path = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/pop_midi/pop_chords_normalized.json"
 
-    save_dir = "./LSTM/model/jazz"
+    save_dir = "./LSTM/model/pop"
     os.makedirs(save_dir, exist_ok=True)
 
     # 데이터셋 생성
