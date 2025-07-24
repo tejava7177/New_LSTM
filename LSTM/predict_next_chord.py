@@ -1,7 +1,8 @@
 import torch
 import numpy as np
 import os
-from train_lstm import ChordLSTM
+from model.train_lstm import ChordLSTM
+from harmony_score import evaluate_progression, interpret_score
 
 # 지원 장르별 모델 디렉토리
 BASE_DIRS = {
@@ -67,5 +68,8 @@ if __name__ == "__main__":
         )
         print(f"\n🎸 [{genre.upper()}] Top-3 예측 코드 진행 (총 {n_steps+3}개):")
         for i, prog in enumerate(result):
-            print(f"{i+1}번 진행: {' → '.join(prog)}")
+            score = evaluate_progression(model, prog, chord_to_index, index_to_chord)
+            label = interpret_score(score)
+            percent = int(score * 100)
+            print(f"{i+1}번 진행({label}, 확률 {percent}%): {' → '.join(prog)}")
         break
