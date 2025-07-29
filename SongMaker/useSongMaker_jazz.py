@@ -6,6 +6,7 @@ from ai_song_maker.score_helper import process_and_output_score
 from music21 import instrument
 from Patterns_Jazz.Drum.jazzDrumPatterns import generate_jazz_drum_pattern
 from Patterns_Jazz.Piano.jazzPianoPatterns import style_bass_backing_minimal
+from Patterns_Jazz.Lead.jazzPointLines import generate_point_line
 from utils.humanize import humanize_melody  # 있으면 약간만 사용
 
 
@@ -27,6 +28,9 @@ mel, beats, dyn, lyr = generate_jazz_drum_pattern(
 # 3) 피아노(=EP) 미니멀 컴핑
 p_m, p_b, p_d, p_l = style_bass_backing_minimal(predicted_chords, phrase_len=4)
 
+# 4) 포인트 악기 (기본 Vibes 권장)
+pt_m, pt_b, pt_d, pt_l = generate_point_line(predicted_chords, phrase_len=4, density='light',  pickup_prob=0.7 )# 프레이즈 끝 리크 노출 증가
+
 # (원한다면 아주 약하게 휴먼라이즈)
 # p_m, p_b, _ = humanize_melody(p_m, p_b, len_jitter=0.04, vel_base=72, vel_jitter=6, rest_prob=0.03)
 
@@ -42,10 +46,22 @@ parts_data = {
 
     "CompEP": {
         "instrument": instrument.ElectricPiano(),  # EP로 존재감 낮추고 질감 가볍게
-        "melodies": p_m, "beat_ends": p_b, "dynamics": p_d, "lyrics": p_l
+        "melodies": p_m,
+        "beat_ends": p_b,
+        "dynamics": p_d,
+        "lyrics": p_l
     }
-
 }
+
+parts_data.update({
+    "PointVibes": {
+        "instrument": instrument.Clarinet(),  # 또는 instrument.Trumpet(), instrument.Clarinet()
+        "melodies": pt_m,
+        "beat_ends": pt_b,
+        "dynamics": pt_d,
+        "lyrics": pt_l
+    }
+})
 
 score_data = {
     "key": "C",
