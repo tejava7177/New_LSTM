@@ -325,6 +325,57 @@ def _style_quartal_modal(chords, density="medium", seed=None):
                 cur = _append(mel, be, dyn, lyr, cur, ["rest"], d2, d='mp')
 
     return mel, be, dyn, lyr
+def style_bass_backing_minimal(chords, phrase_len=4, seed=None):
+    """
+    베이스 백킹 트랙용 미니멀 EP 컴핑:
+      - 스윙 그리드(2/3,1/3), 2/4에만 주로 히트
+      - 프레이즈 마지막 마디(예: 4, 8, …) 4&에 아주 짧은 마커
+    반환: melodies, beat_ends, dynamics, lyrics
+    """
+    if seed is not None:
+        random.seed(seed)
+
+    mel, be, dyn, lyr = [], [], [], []
+    cur = Fraction(0,1)
+    d1, d2 = _swing_pair()  # 2/3, 1/3
+
+    for bar_idx, ch in enumerate(chords, start=1):
+        V = _voicing_shell(ch)
+
+        # beat1: 전부 쉼 → 베이스 공간
+        cur = _append(mel, be, dyn, lyr, cur, ["rest"], d1, 'mp')
+        cur = _append(mel, be, dyn, lyr, cur, ["rest"], d2, 'mp')
+
+        # beat2: 주 히트(강세는 살짝만)
+        cur = _append(mel, be, dyn, lyr, cur, V, d1, 'mf')
+        # 2& 는 대부분 쉼 (가끔 탑노트 15~20%)
+        if random.random() < 0.2:
+            cur = _append(mel, be, dyn, lyr, cur, [V[-1]], d2, 'mp')
+        else:
+            cur = _append(mel, be, dyn, lyr, cur, ["rest"], d2, 'mp')
+
+        # beat3: 대체로 쉼
+        cur = _append(mel, be, dyn, lyr, cur, ["rest"], d1, 'mp')
+        # 3& 아주 가끔 약한 탑노트(10%)
+        if random.random() < 0.1:
+            cur = _append(mel, be, dyn, lyr, cur, [V[-1]], d2, 'mp')
+        else:
+            cur = _append(mel, be, dyn, lyr, cur, ["rest"], d2, 'mp')
+
+        # beat4: 주 히트
+        cur = _append(mel, be, dyn, lyr, cur, V, d1, 'mf')
+
+        # 4&: 프레이즈 마지막 바에만 '짧은 마커(탑노트 단발)'
+        if (bar_idx % phrase_len) == 0 and random.random() < 0.8:
+            cur = _append(mel, be, dyn, lyr, cur, [V[-1]], d2, 'mf')
+        else:
+            # 그 외에는 대부분 쉼(가끔 10%만 탑노트)
+            if random.random() < 0.1:
+                cur = _append(mel, be, dyn, lyr, cur, [V[-1]], d2, 'mp')
+            else:
+                cur = _append(mel, be, dyn, lyr, cur, ["rest"], d2, 'mp')
+
+    return mel, be, dyn, lyr
 
 _STYLES = {
     "swing_shells":   _style_swing_shells,
