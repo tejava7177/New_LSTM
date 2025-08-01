@@ -5,8 +5,10 @@ from ai_song_maker.score_helper import process_and_output_score
 from music21 import instrument
 from Patterns_Jazz.Drum.jazzDrumPatterns import generate_jazz_drum_pattern
 from Patterns_Jazz.Piano.jazzPianoPatterns import style_bass_backing_minimal
+from Patterns_Jazz.PointInst.point_inst_list import select_point_instrument
 from Patterns_Jazz.Lead.jazzPointLines import generate_point_line
 from utils.humanize import humanize_melody
+
 
 # ──────────────────────────────────────────────
 # 1) **여기서 tmp_selected_progression.json 불러오기**
@@ -32,6 +34,7 @@ mel, beats, dyn, lyr = generate_jazz_drum_pattern(
 p_m, p_b, p_d, p_l = style_bass_backing_minimal(predicted_chords, phrase_len=4)
 
 # 4) 포인트 악기
+point_inst = select_point_instrument()
 pt_m, pt_b, pt_d, pt_l = generate_point_line(predicted_chords, phrase_len=4, density='light', pickup_prob=0.7)
 
 # parts_data 구성
@@ -51,7 +54,7 @@ parts_data = {
         "lyrics": p_l
     },
     "PointVibes": {
-        "instrument": instrument.Clarinet(),  # Trumpet, Clarinet 등으로 교체 가능
+        "instrument": point_inst,
         "melodies": pt_m,
         "beat_ends": pt_b,
         "dynamics": pt_d,
