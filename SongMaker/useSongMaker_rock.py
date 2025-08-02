@@ -2,6 +2,115 @@
 import sys, os, json, argparse, random
 sys.path.append('/Users/simjuheun/Desktop/myProject/New_LSTM/SongMaker')
 
+
+# SongMaker/useSongMaker_rock.py
+def generate_rock_track(
+    progression,
+    tempo=120,
+    drum="auto",
+    gtr="auto",
+    keys="auto",
+    keys_shell=False,
+    point_inst="none",         # API에서는 기본적으로 인터랙션 없이 동작하도록 'none'
+    point_density="light",
+    point_key="C",
+    out_dir=None               # API에서 주는 출력 폴더
+):
+    """
+    [역할] 코드 진행과 옵션을 받아 Rock 장르 MIDI/MusicXML을 생성한다.
+    [반환] dict(midi_path, musicxml_path, tag, used_styles)
+    """
+    import tempfile
+    # 진행/기본값
+    chords = progression
+    if not chords:
+        raise ValueError("progression(코드 진행)이 비었습니다.")
+    num_bars = len(chords)
+    total_beats = 4.0 * num_bars
+
+    # 출력 폴더
+    if out_dir is None:
+        out_dir = tempfile.mkdtemp(prefix="rock_output_")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # 악기/스타일
+    insts = get_rock_band_instruments()
+    drum_style = drum if drum != "auto" else random.choice(
+        ["straight8", "straight16", "halfTime", "punk8", "tomGroove", "rock8"]
+    )
+    gtr_style = gtr if gtr != "auto" else random.choice(["power8", "sync16", "offChop"])
+    keys_style = keys if keys != "auto" else random.choice(["arp4", "blockPad", "riffHook"])
+
+    # 드럼
+    d_m, d_b, d_d, d_l = generate_rock_drum_pattern(
+        measures=num_bars, style=drum_style, fill_prob=0.08
+    )
+    d_m, d_b, d_d, d_l = fix_beats(d_m, d_b, d_d, d_l, grid=0.25, total_beats=total_beats)
+
+    # 기타
+    g_m, g_b, g_d, g_l = generate_rock_rhythm_guitar(chords, style=gtr_style)
+    g_m, g_b, g_d, g_l = fix_beats(g_m, g_b, g_d, g_l, grid=0.25, total_beats=total_beats)
+
+    # 키즈
+    k_m, k_b, k_d, k_l = generate_rock_keys(chords, style=keys_style, add_shell=keys_shell)
+    k_m, k_b, k_d, k_l = fix_beats(k_m, k_b, k_d, k_l, grid=0.25, total_beats=total_beats)
+
+    parts_data = {
+        "Drums": {
+            "instrument": insts["drum"],
+            "melodies": d_m, "beat_ends": d_b, "dynamics": d_d, "lyrics": d_l
+        },
+        "RhythmGuitar": {
+            "instrument": insts["elec_guitar"],
+            "melodies": g_m, "beat_ends": g_b, "dynamics": g_d, "lyrics": g_l
+        },
+        "Keys": {
+            "instrument": insts["synth"],
+            "melodies": k_m, "beat_ends": k_b, "dynamics": k_d, "lyrics": k_l
+        }
+    }
+
+    # 포인트 악기 (쉼표로 여러 개 가능)
+    if point_inst and point_inst.lower() not in ["none", ""]:
+        for name in [s.strip() for s in point_inst.split(",") if s.strip()]:
+            inst = get_point_instrument(name)
+            if not inst:
+                print(f"⚠️ 알 수 없는 포인트 악기: {name} (건너뜀)")
+                continue
+            pt_mel, pt_beats, pt_dyn, pt_lyr = generate_point_line(
+                chords, phrase_len=4, density=point_density, key=point_key
+            )
+            pt_mel, pt_beats, pt_dyn, pt_lyr = fix_beats(
+                pt_mel, pt_beats, pt_dyn, pt_lyr, grid=0.25, total_beats=total_beats
+            )
+            parts_data[f"Point_{name}"] = {
+                "instrument": inst,
+                "melodies": pt_mel, "beat_ends": pt_beats,
+                "dynamics": pt_dyn, "lyrics": pt_lyr
+            }
+
+    # 출력
+    score_data = {"key": "C", "time_signature": "4/4", "tempo": tempo, "clef": "treble"}
+    tag = f"{drum_style}-{gtr_style}-{keys_style}{'-shell' if keys_shell else ''}"
+    musicxml_path = os.path.join(out_dir, f"rock_{tag}.xml")
+    midi_path     = os.path.join(out_dir, f"rock_{tag}.mid")
+
+    process_and_output_score(parts_data, score_data, musicxml_path, midi_path, show_html=False)
+
+    return {
+        "midi_path": midi_path,
+        "musicxml_path": musicxml_path,
+        "tag": tag,
+        "used_styles": {
+            "drum": drum_style, "gtr": gtr_style, "keys": keys_style,
+            "keys_shell": keys_shell, "point_inst": point_inst
+        }
+    }
+
+
+
+
+# 기존 로직 함수
 from utils.timing_rock import fix_beats
 from ai_song_maker.score_helper import process_and_output_score
 from instruments.gm_instruments import get_rock_band_instruments
