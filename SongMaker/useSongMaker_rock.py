@@ -2,7 +2,7 @@
 import sys, os, json, argparse, random
 sys.path.append('/Users/simjuheun/Desktop/myProject/New_LSTM/SongMaker')
 
-from utils.timing import fix_beats
+from utils.timing_rock import fix_beats
 from ai_song_maker.score_helper import process_and_output_score
 from instruments.gm_instruments import get_rock_band_instruments
 from Patterns_Rock.Drum.rockDrumPatterns import generate_rock_drum_pattern
