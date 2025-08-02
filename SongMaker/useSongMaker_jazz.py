@@ -10,8 +10,6 @@ from Patterns_Jazz.Lead.jazzPointLines import generate_point_line
 from utils.humanize import humanize_melody
 
 
-
-
 # ──────────────────────────────────────────────
 # 1) **여기서 tmp_selected_progression.json 불러오기**
 PROG_PATH = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/jazz_midi/chord_JSON/tmp_selected_progression.json"
