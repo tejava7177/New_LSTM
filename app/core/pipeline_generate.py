@@ -18,13 +18,13 @@ def make_track(genre, progression, tempo, options, outdir):
     if genre == "rock":
         result = generate_rock_track(
             progression=progression, tempo=tempo,
-            drum=options.get("drum","auto"),
-            gtr=options.get("gtr","auto"),
-            keys=options.get("keys","auto"),
+            drum=options.get("drum", "auto"),
+            gtr=options.get("gtr", "auto"),
+            keys=options.get("keys", "auto"),
             keys_shell=options.get("keys_shell", False),
-            point_inst=options.get("point_inst","none"),
-            point_density=options.get("point_density","light"),
-            point_key=options.get("point_key","C"),
+            point_inst=options.get("point_inst", "none"),
+            point_density=options.get("point_density", "light"),
+            point_key=options.get("point_key", "C"),
             out_dir=str(job_dir)
         )
     elif genre == "jazz":  # ← 추가
