@@ -2,6 +2,8 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from pathlib import Path
+from fastapi import Query
+from datetime import datetime
 import uuid
 
 router = APIRouter()
@@ -20,9 +22,36 @@ async def upload_audio(audio: UploadFile = File(...)):
     dest.write_bytes(await audio.read())
     return {"id": file_id, "url": f"/api/audio/{file_id}"}
 
+# 2) **목록**  ← 새로 추가
+@router.get("/list")
+def list_audio():
+    items = []
+    for p in RECORD_DIR.iterdir():
+        if p.is_file():
+            items.append({
+                "id": p.name,
+                "size": p.stat().st_size,
+                "created": datetime.fromtimestamp(p.stat().st_ctime).isoformat(),
+            })
+    # 최신순
+    items.sort(key=lambda x: x["created"], reverse=True)
+    return items
+
+
 @router.get("/{file_id}")
 def get_audio(file_id: str):   # ← 여기 str 로 수정
     path = RECORD_DIR / file_id
     if not path.exists():
         raise HTTPException(404, "not found")
     return FileResponse(path)
+
+
+
+
+@router.delete("/{file_id}")
+def delete_audio(file_id: str):
+    path = RECORD_DIR / file_id
+    if not path.exists():
+        raise HTTPException(404, "not found")
+    path.unlink()
+    return {"deleted": file_id}
