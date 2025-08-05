@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import RecordPage from './pages/RecordPage'
 import UploadList from './pages/UploadList'
+import {Link} from "react-router-dom";
 
 export default function App() {
   const [tab, setTab] = useState<'record' | 'uploads'>('record')
@@ -15,6 +16,7 @@ export default function App() {
                 style={{marginRight:8, fontWeight: tab==='record'?'bold':'normal'}}>
           🎙 녹음
         </button>
+          <Link to="/tunerBass">🎸 베이스 튜너</Link>
         <button onClick={() => setTab('uploads')}
                 style={{fontWeight: tab==='uploads'?'bold':'normal'}}>
           📂 업로드 목록
