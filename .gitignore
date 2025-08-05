@@ -1,9 +1,14 @@
-# Byte-compiled / optimized / DLL files
+# ───────────────── OS / IDE ─────────────────
+.DS_Store
+.idea/
+.vscode/
+
+# ───────────────── Python ─────────────────
 __pycache__/
 *.py[cod]
 *.so
 
-# Conda environments
+# 가상환경
 .env/
 .venv/
 *.env
@@ -14,38 +19,26 @@ ENV/
 env.bak/
 venv.bak/
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# PyCharm
-.idea/
-
-# VSCode
-.vscode/
-
-# MacOS
-.DS_Store
-
-# Logs and outputs
-*.log
-*.out
-*.tmp
-
-# Python egg
-*.egg
-*.egg-info/
+# 빌드/배포 산출물
 dist/
 build/
 *.manifest
 *.spec
 
-# PyInstaller
+# PyInstaller 등 바이너리
 *.exe
 *.dll
 *.pkg
 *.deb
 
-# Audio/ML related
+# 노트북/로그
+.ipynb_checkpoints/
+*.log
+*.out
+*.tmp
+
+# ───────────────── ML / 데이터 산출물 ─────────────────
+# 큰 배열/모델 체크포인트 등 (필요 시만 추적)
 *.npy
 *.npz
 *.h5
@@ -53,13 +46,33 @@ build/
 *.pt
 *.pth
 *.pb
-*.csv
-*.json
 
-
+# 프로젝트 산출 폴더
 midi_output/
 output/
 results/
 
+# 음악/악보 산출물(원본만 추적하고 싶다면 유지)
 *.xml
 *.mid
+# (필요하면 오디오 렌더도 제외)
+*.wav
+*.mp3
+*.flac
+
+# ───────────────── FastAPI 산출물 ─────────────────
+# 서버에서 저장되는 녹음 파일/잡 결과
+recordings/*
+!recordings/.gitkeep
+app/jobs/*
+!app/jobs/.gitkeep
+
+# ───────────────── Node / Vite (frontend) ─────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.npm-cache/
+# .npmrc는 프로젝트 캐시 경로 설정이라 추적 유지
+# frontend/.npmrc  ← 유지
+
+*.csv
