@@ -30,7 +30,7 @@ def interpret_score(score):
     if score >= 0.7:
         return "정석 진행"
     elif score >= 0.6:
-        return "대표적 록 진행"
+        return "대중적인 진행"
     elif score >= 0.45:
         return "비교적 많이 쓰임"
     else:
