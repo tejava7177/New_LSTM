@@ -1,0 +1,18 @@
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:24px}button,select{font-size:16px}audio{width:100%}
+
+                                                                                                             /* 녹음 중 빨간 원 점멸 */
+@keyframes blink {
+  0%   { opacity: 1; }
+  50%  { opacity: 0.2; }
+  100% { opacity: 1; }
+}
+
+.rec-indicator {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: red;
+  animation: blink 1s infinite;
+}

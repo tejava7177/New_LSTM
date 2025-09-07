@@ -1,83 +1,110 @@
 # SongMaker/useSongMaker_jazz.py
-import sys, os, json, random
-sys.path.append('/Users/simjuheun/Desktop/myProject/New_LSTM/SongMaker')
+import os
+import random
+import tempfile
+from typing import Optional, List, Dict
 
-from ai_song_maker.score_helper import process_and_output_score
 from music21 import instrument
-from Patterns_Jazz.Drum.jazzDrumPatterns import generate_jazz_drum_pattern
-from Patterns_Jazz.Piano.jazzPianoPatterns import style_bass_backing_minimal
-from Patterns_Jazz.PointInst.point_inst_list import select_point_instruments
-from Patterns_Jazz.Lead.jazzPointLines import generate_point_line
-from utils.timing_jazz import fix_beats, clip_and_fill_rests
 
-# 1) 코드 진행 불러오기 (.json)
-PROG_PATH = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/jazz_midi/chord_JSON/tmp_selected_progression.json"
-with open(PROG_PATH, "r", encoding="utf-8") as f:
-    data = json.load(f)
-chords = data.get("progression", ["Dm7","G7","Cmaj7","Fmaj7"] * 2)
-num_bars = len(chords)
-total_beats = 4.0 * num_bars
-print("🎹 불러온 코드 진행:", chords)
-
-# 2) 드럼 (스타일 랜덤)
-style = random.choice(["medium_swing", "up_swing", "two_feel", "shuffle_blues", "brush_ballad"])
-d_m, d_b, d_d, d_l = generate_jazz_drum_pattern(
-    measures=num_bars, style=style, density="medium", fill_prob=0.12, seed=None
+# 패키지 상대 임포트 (SongMaker가 패키지여야 함: 하위 폴더에 __init__.py 필요)
+from .ai_song_maker.score_helper import process_and_output_score
+from .Patterns_Jazz.Drum.jazzDrumPatterns import generate_jazz_drum_pattern
+from .Patterns_Jazz.Piano.jazzPianoPatterns import style_bass_backing_minimal
+from .Patterns_Jazz.PointInst.point_inst_list import (
+    POINT_CHOICES_JAZZ,
+    get_point_instrument,
 )
-# 드럼도 과도 길이 정리(경고 방지)
-d_m, d_b, d_d, d_l = fix_beats(d_m, d_b, d_d, d_l, grid=0.25, total_beats=total_beats)
-d_m, d_b, d_d, d_l = clip_and_fill_rests(d_m, d_b, d_d, d_l, 2.0, 0.25)
+from .Patterns_Jazz.Lead.jazzPointLines import generate_point_line
+from .utils.timing_jazz import fix_beats, clip_and_fill_rests
 
-# 3) EP 미니멀 컴핑
-p_m, p_b, p_d, p_l = style_bass_backing_minimal(chords, phrase_len=4)
-p_m, p_b, p_d, p_l = fix_beats(p_m, p_b, p_d, p_l, grid=0.25, total_beats=total_beats)
-p_m, p_b, p_d, p_l = clip_and_fill_rests(p_m, p_b, p_d, p_l, 2.0, 0.25)
 
-# 4) 포인트 악기들(여러 개 가능)
-pt_specs = select_point_instruments()  # [(name, instrument), ...]
-point_parts = {}
-for name, inst in pt_specs:
-    # 포인트 라인 생성 (함수 시그니처 변경에 대비해 안전 래퍼 사용)
-    try:
-        pt_m, pt_b, pt_d, pt_l = generate_point_line(chords, phrase_len=4, density='light', pickup_prob=0.7)
-    except TypeError:
-        pt_m, pt_b, pt_d, pt_l = generate_point_line(chords, phrase_len=4, density='light')
+def generate_jazz_track(
+    progression: List[str],
+    tempo: int = 140,
+    drum: str = "auto",         # ["medium_swing","up_swing","two_feel","shuffle_blues","brush_ballad"]
+    comp: str = "auto",         # 현재 minimal 고정(확장 가능)
+    point_inst: str = "none",   # "none" | "auto" | "trumpet, flute" (쉼표 구분)
+    point_density: str = "light",
+    point_key: str = "C",
+    out_dir: Optional[str] = None,
+) -> Dict[str, str]:
+    """
+    progression/옵션을 받아 Jazz 트랙을 생성하고 MIDI/MusicXML 경로를 반환한다.
+    콘솔 입력 없이 동작한다.
+    """
+    # 입력 검증
+    chords = progression or []
+    if not chords:
+        raise ValueError("progression(코드 진행)이 비었습니다.")
+    num_bars = len(chords)
+    total_beats = 4.0 * num_bars
 
-    pt_m, pt_b, pt_d, pt_l = fix_beats(pt_m, pt_b, pt_d, pt_l, grid=0.25, total_beats=total_beats)
-    pt_m, pt_b, pt_d, pt_l = clip_and_fill_rests(pt_m, pt_b, pt_d, pt_l, 2.0, 0.25)
+    # 출력 디렉토리
+    if out_dir is None:
+        out_dir = tempfile.mkdtemp(prefix="jazz_output_")
+    os.makedirs(out_dir, exist_ok=True)
 
-    point_parts[f"Point_{name}"] = {
-        "instrument": inst,
-        "melodies": pt_m, "beat_ends": pt_b, "dynamics": pt_d, "lyrics": pt_l
+    # 스타일 결정
+    drum_style = drum if drum != "auto" else random.choice(
+        ["medium_swing", "up_swing", "two_feel", "shuffle_blues", "brush_ballad"]
+    )
+    comp_style = comp if comp != "auto" else "minimal"
+
+    # ---- 드럼 ----
+    d_m, d_b, d_d, d_l = generate_jazz_drum_pattern(
+        measures=num_bars, style=drum_style, density="medium", fill_prob=0.12, seed=None
+    )
+    d_m, d_b, d_d, d_l = fix_beats(d_m, d_b, d_d, d_l, total_beats=total_beats)  # grid=0.5 기본
+    d_m, d_b, d_d, d_l = clip_and_fill_rests(d_m, d_b, d_d, d_l)                 # dur_max=2.0 기본
+
+    # ---- EP 컴핑 ----
+    p_m, p_b, p_d, p_l = style_bass_backing_minimal(chords, phrase_len=4)
+    p_m, p_b, p_d, p_l = fix_beats(p_m, p_b, p_d, p_l, total_beats=total_beats)
+    p_m, p_b, p_d, p_l = clip_and_fill_rests(p_m, p_b, p_d, p_l)
+
+    # ---- 파트 조립 ----
+    parts_data = {
+        "JazzDrums": {
+            "instrument": instrument.SnareDrum(),          # 필요시 프로젝트 규칙에 맞춰 교체
+            "melodies": d_m, "beat_ends": d_b, "dynamics": d_d, "lyrics": d_l,
+        },
+        "CompEP": {
+            "instrument": instrument.ElectricPiano(),
+            "melodies": p_m, "beat_ends": p_b, "dynamics": p_d, "lyrics": p_l,
+        },
     }
 
-# 5) parts_data 조립
-parts_data = {
-    "JazzDrums": {
-        "instrument": instrument.SnareDrum(),
-        "melodies": d_m, "beat_ends": d_b, "dynamics": d_d, "lyrics": d_l,
-    },
-    "CompEP": {
-        "instrument": instrument.ElectricPiano(),
-        "melodies": p_m, "beat_ends": p_b, "dynamics": p_d, "lyrics": p_l,
-    },
-}
-parts_data.update(point_parts)
+    # ---- 포인트 악기(옵션) ----
+    if point_inst and point_inst.lower() not in ["none", ""]:
+        resolved = []
+        if point_inst.lower() == "auto":
+            pick_n = 2
+            names = random.sample(POINT_CHOICES_JAZZ, k=min(pick_n, len(POINT_CHOICES_JAZZ)))
+            resolved = [(n, get_point_instrument(n)) for n in names]
+        else:
+            names = [s.strip() for s in point_inst.split(",") if s.strip()]
+            for n in names:
+                inst_obj = get_point_instrument(n)  # 유효하지 않으면 ValueError 발생
+                resolved.append((n, inst_obj))
 
-# 6) 스코어/저장
-score_data = {
-    "key": "C",
-    "time_signature": "4/4",
-    "tempo": 140,
-    "clef": "treble"
-}
+        for name, inst_obj in resolved:
+            try:
+                m, b, d, l = generate_point_line(chords, phrase_len=4, density=point_density, pickup_prob=0.7)
+            except TypeError:
+                m, b, d, l = generate_point_line(chords, phrase_len=4, density=point_density)
+            m, b, d, l = fix_beats(m, b, d, l, total_beats=total_beats)
+            m, b, d, l = clip_and_fill_rests(m, b, d, l)
+            parts_data[f"Point_{name}"] = {
+                "instrument": inst_obj,
+                "melodies": m, "beat_ends": b, "dynamics": d, "lyrics": l,
+            }
 
-out_dir = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data/jazz_midi"
-os.makedirs(out_dir, exist_ok=True)
-musicxml_path = f"{out_dir}/jazz_{style}.xml"
-midi_path     = f"{out_dir}/jazz_{style}.mid"
+    # ---- 출력 ----
+    score_data = {"key": "C", "time_signature": "4/4", "tempo": tempo, "clef": "treble"}
+    tag = f"{drum_style}-{comp_style}"
+    xml_path = os.path.join(out_dir, f"jazz_{tag}.xml")
+    midi_path = os.path.join(out_dir, f"jazz_{tag}.mid")
 
-process_and_output_score(parts_data, score_data, musicxml_path=musicxml_path, midi_path=midi_path, show_html=False)
-pnames = ", ".join(pt_specs[i][0] for i in range(len(pt_specs))) if pt_specs else "none"
-print(f"✅ Jazz 생성 완료! style={style}, point={pnames}")
-print("→", midi_path)
+    process_and_output_score(parts_data, score_data, musicxml_path=xml_path, midi_path=midi_path, show_html=False)
+
+    return {"midi_path": midi_path, "musicxml_path": xml_path, "tag": tag}
