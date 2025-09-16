@@ -85,6 +85,57 @@ function buildSymbol(root: string, q: Quality, opts?: { majAsText?: boolean }) {
   }
 }
 
+
+/* ===== 진행 미리듣기/파서 유틸 ===== */
+type PredictResult = {
+  candidates: { progression: string[]; score?: number; label?: string }[];
+};
+
+const PC_MAP: Record<string, number> = {
+  C:0,'C#':1,Db:1,D:2,'D#':3,Eb:3,E:4,F:5,'F#':6,Gb:6,G:7,'G#':8,Ab:8,A:9,'A#':10,Bb:10,B:11
+};
+const parseSymbol = (sym: string) => {
+  const m = sym.trim().match(/^([A-G](?:#|b)?)(.*)$/);
+  return { root: m?.[1] ?? 'C', q: (m?.[2] ?? '').trim() }; // 예: C, Cm, C7, C5, Csus4...
+};
+const normalizeQuality = (q: string): Quality => {
+  if (q === '' || q === 'maj') return 'maj';
+  if (q === 'm') return 'min';
+  const ok = new Set(['5','7','sus4','dim','aug','maj','min']);
+  return (ok.has(q) ? (q as Quality) : 'maj');
+};
+// 간단 합성: 진행을 한 박자씩 재생
+function previewProgression(symbols: string[], tempo=96) {
+  const ctx = getCtx();
+  const beat = 60/tempo;
+  let t = ctx.currentTime + 0.05;
+
+  const tonesByQ: Record<string, number[]> = {
+    '': [0,4,7], maj:[0,4,7], m:[0,3,7], min:[0,3,7], '5':[0,7], '7':[0,4,7,10],
+    sus4:[0,5,7], dim:[0,3,6], aug:[0,4,8]
+  };
+
+  symbols.forEach(sym => {
+    const {root, q} = parseSymbol(sym);
+    const pcs = (tonesByQ[q] ?? tonesByQ['']).map(i => (PC_MAP[root] + i) % 12);
+
+    const master = ctx.createGain(); master.gain.value = 0; master.connect(ctx.destination);
+    pcs.forEach((pc, idx) => {
+      const f = idx===0 ? pcToBassFreq(pc) : pcToBassFreq(pc)*2;
+      const o = ctx.createOscillator(); o.type = idx===0?'triangle':'sine';
+      const eg = ctx.createGain(); eg.gain.setValueAtTime(0, t);
+      eg.gain.linearRampToValueAtTime(idx===0?0.9:0.35, t+0.02);
+      eg.gain.exponentialRampToValueAtTime(0.0001, t+beat*0.95);
+      o.frequency.value = f; o.connect(eg).connect(master);
+      o.start(t); o.stop(t+beat);
+    });
+    master.gain.linearRampToValueAtTime(1.0, t+0.01);
+    master.gain.exponentialRampToValueAtTime(0.0001, t+beat);
+    t += beat;
+  });
+}
+
+
 /* ===== 페이지 ===== */
 type Slot = { name: string } | null
 
@@ -368,12 +419,85 @@ export default function InputBassChordPage() {
         </div>
 
         {error && <div style={{ marginTop: 10, color: '#c62828' }}>오류: {error}</div>}
+
         {result && (
           <div style={{ marginTop: 12 }}>
-            <div><strong>결과</strong></div>
-            <pre style={{ background:'#f8f8f8', padding:8, borderRadius:6, overflowX:'auto' }}>
-{JSON.stringify(result, null, 2)}
-            </pre>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>결과</div>
+
+            {/* 카드 리스트 */}
+            {((result as PredictResult).candidates || []).map((c, i) => (
+              <div key={i}
+                   style={{
+                     border:'1px solid #e6e6e6', borderRadius:10, padding:12, marginBottom:10,
+                     boxShadow:'0 1px 0 rgba(0,0,0,0.03)'
+                   }}>
+                {/* 상단 라벨/스코어 */}
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8}}>
+                  <span style={{
+                    fontSize:12, padding:'2px 8px', borderRadius:999,
+                    background:'#eef5ff', color:'#2b6cb0'
+                  }}>
+                    {c.label || '추천 진행'}
+                  </span>
+                  {typeof c.score === 'number' && (
+                    <div style={{display:'flex', alignItems:'center', gap:6, minWidth:160}}>
+                      <div style={{height:6, background:'#eee', width:120, borderRadius:4, overflow:'hidden'}}>
+                        <div style={{
+                          width:`${Math.round(c.score*100)}%`, height:'100%',
+                          background:'#2b6cb0'
+                        }}/>
+                      </div>
+                      <span style={{fontSize:12, color:'#666'}}>{(c.score*100).toFixed(0)}%</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* 진행 표시 */}
+                <div style={{display:'flex', flexWrap:'wrap', gap:6, alignItems:'center'}}>
+                  {c.progression.map((sym, j) => (
+                    <span key={j} style={{display:'inline-flex', alignItems:'center', gap:6}}>
+                      <span style={{
+                        padding:'6px 10px', border:'1px solid #ddd', borderRadius:8,
+                        background:'#fff', fontWeight:600
+                      }}>{sym}</span>
+                      {j < c.progression.length-1 && <span style={{color:'#999'}}>→</span>}
+                    </span>
+                  ))}
+                </div>
+
+                {/* 액션 버튼 */}
+                <div style={{marginTop:10, display:'flex', gap:8}}>
+                  <button onClick={() => previewProgression(c.progression)}>▶︎ 미리듣기</button>
+                  <button
+                    onClick={() => {
+                      const roots: string[] = []
+                      const qs: Quality[] = []
+                      c.progression.slice(0, targetCount).forEach(sym => {
+                        const {root, q} = parseSymbol(sym)
+                        roots.push(root)
+                        qs.push(normalizeQuality(q))
+                      })
+                      setSlots(roots.map(r => ({ name: r })))
+                      setQualities(prev => {
+                        const arr = [...prev]
+                        for (let k = 0; k < targetCount; k++) arr[k] = qs[k] ?? 'maj'
+                        return arr
+                      })
+                      setIdx(Math.min(c.progression.length, targetCount) - 1)
+                      window.scrollTo({ top: 0, behavior: 'smooth' })
+                    }}
+                  >Seed로 적용</button>
+                </div>
+              </div>
+            ))}
+
+            {/* 원시 JSON 토글 (옵션) */}
+            {/* <details style={{marginTop:8}}>
+              <summary style={{cursor:'pointer'}}>원시 JSON 보기</summary>
+              <pre style={{ background:'#f8f8f8', padding:8, borderRadius:6, overflowX:'auto' }}>
+                {JSON.stringify(result, null, 2)}
+              </pre>
+            </details> */}
           </div>
         )}
       </div>
