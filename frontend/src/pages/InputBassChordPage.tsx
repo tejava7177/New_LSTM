@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import DeviceSelect from '../components/DeviceSelect'
 import { usePitch } from '../hooks/usePitch'
+import { generateTrack, getTrackStatus, midiUrl, xmlUrl } from '../lib/tracks'
 
 /* ===== 캡처/게이트 파라미터 ===== */
 const DEFAULT_CAPTURE_COUNT = 3
@@ -164,6 +165,13 @@ export default function InputBassChordPage() {
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string>('')
 
+  // --- 트랙 생성용 상태(공용) ---
+  const [tempo, setTempo] = useState(100)
+  const [genId, setGenId] = useState<string | null>(null)
+  const [progress, setProgress] = useState(0)
+  const [downReady, setDownReady] = useState(false)
+  const [genErr, setGenErr] = useState('')
+
   // 입력 개수 변경 시 초기화
   useEffect(() => {
     setSlots(Array(targetCount).fill(null))
@@ -285,6 +293,8 @@ export default function InputBassChordPage() {
       const ok = confirm(`아직 ${targetCount - filled}개 미입력입니다. 현재 ${filled}개로 진행할까요?`)
       if (!ok) return
     }
+
+
     const seed = buildSeed()
     setLoading(true)
     try {
@@ -302,6 +312,44 @@ export default function InputBassChordPage() {
       setLoading(false)
     }
   }
+
+      // 트랙 생성 시작 + 상태 폴링
+async function startGenerate(symbols: string[]) {
+  try {
+    setGenErr('')
+    setDownReady(false)
+    setProgress(0)
+
+    const { jobId } = await generateTrack({
+      genre: genre || 'rock',
+      progression: symbols,
+      tempo,
+      options: {}, // 확장 포인트
+    })
+    setGenId(jobId)
+
+    const timer = setInterval(async () => {
+      try {
+        const s = await getTrackStatus(jobId)
+        setProgress(s.progress ?? 0)
+        if (s.status === 'DONE') {
+          clearInterval(timer)
+          setDownReady(true)
+        }
+        if (s.status === 'ERROR') {
+          clearInterval(timer)
+          setGenErr('트랙 생성 중 오류가 발생했습니다.')
+        }
+      } catch (e: any) {
+        clearInterval(timer)
+        setGenErr(e.message ?? String(e))
+      }
+    }, 700)
+  } catch (e: any) {
+    setGenErr(e.message ?? String(e))
+  }
+}
+
 
   const filled = slots.filter(Boolean).length
 
@@ -488,6 +536,35 @@ export default function InputBassChordPage() {
                     }}
                   >Seed로 적용</button>
                 </div>
+                 {/* === 트랙 생성 === */}
+<div style={{marginTop:10, padding:10, borderTop:'1px dashed #ddd'}}>
+  <div style={{display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+    <label>템포(BPM):
+      <input
+        type="number" min={60} max={200} step={1}
+        value={tempo}
+        onChange={e=>setTempo(Number(e.target.value))}
+        style={{marginLeft:6, width:70}}
+      />
+    </label>
+
+    <button onClick={() => startGenerate(c.progression)} disabled={!!genId && !downReady}>
+      {genId && !downReady ? '생성 중…' : '트랙 생성 (MIDI / 악보)'}
+    </button>
+
+    {genId && !downReady && (
+      <span style={{fontSize:12, color:'#666'}}>진행률 {progress}% …</span>
+    )}
+
+    {downReady && genId && (
+      <span style={{display:'inline-flex', gap:8}}>
+        <a href={midiUrl(genId)} target="_blank" rel="noreferrer">⬇ MIDI 다운로드</a>
+        <a href={xmlUrl(genId)}  target="_blank" rel="noreferrer">⬇ 악보(XML) 다운로드</a>
+      </span>
+    )}
+  </div>
+  {genErr && <div style={{color:'#c62828', marginTop:6}}>{genErr}</div>}
+</div>
               </div>
             ))}
 
