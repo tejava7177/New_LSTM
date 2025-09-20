@@ -4,6 +4,9 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from fastapi import Query
 from datetime import datetime
+
+from ..core.midi_render import render_wav_with_fluidsynth
+
 import uuid
 
 router = APIRouter()
@@ -55,3 +58,23 @@ def delete_audio(file_id: str):
         raise HTTPException(404, "not found")
     path.unlink()
     return {"deleted": file_id}
+
+
+@router.post("/render-midi")
+async def render_uploaded_midi(file: UploadFile = File(...)):
+    name = (file.filename or "input.mid").lower()
+    if not (name.endswith(".mid") or name.endswith(".midi")):
+        raise HTTPException(400, "MIDI file (.mid/.midi) only")
+
+    midi_id = uuid.uuid4().hex
+    midi_path = RECORD_DIR / f"{midi_id}.mid"
+    midi_path.write_bytes(await file.read())
+
+    wav_path = midi_path.with_suffix(".wav")
+    try:
+        render_wav_with_fluidsynth(midi_path, wav_path, sample_rate=48000)
+    except Exception as e:
+        raise HTTPException(500, f"render failed: {e!s}")
+
+    # 기존 /api/audio/{file_id} 가 RECORD_DIR의 파일을 서빙하므로 재사용
+    return {"wavUrl": f"/api/audio/{wav_path.name}"}

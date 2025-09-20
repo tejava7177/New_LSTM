@@ -76,3 +76,4 @@ frontend/.npm-cache/
 # frontend/.npmrc  ← 유지
 
 *.csv
+*.sf2

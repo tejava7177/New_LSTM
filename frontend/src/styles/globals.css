@@ -16,3 +16,23 @@ body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:24px}
   background: red;
   animation: blink 1s infinite;
 }
+
+.pmx-wrap { max-width: 980px; margin: 0 auto; }
+.pmx-panel { border: 1px solid #e9e9e9; border-radius: 10px; padding: 12px 14px; margin: 12px 0; background: #fff; }
+.row { display: inline-flex; align-items: center; gap: 10px; }
+.col { display: flex; flex-direction: column; gap: 6px; }
+.btn { border: 1px solid #cfd3d8; background:#f6f7f9; padding:6px 10px; border-radius:8px; cursor:pointer; }
+.btn.primary { background:#e9f3ff; border-color:#bcd7ff; }
+.btn.danger { background:#ffecec; border-color:#ffbcbc; }
+.hint { color:#666; font-size:12px; }
+.tiny { color:#777; font-size:11px; margin-top:6px; }
+.warn { color:#b00020; margin-top:6px; }
+.mixer { display:grid; grid-template-columns: repeat(2, minmax(260px,1fr)); gap:16px; margin-top:8px; }
+.ch { border:1px dashed #e5e5e5; border-radius:8px; padding:10px; }
+.ch-title { font-weight:700; margin-bottom:6px; }
+.preview audio { width: 100%; }
+.tracks ul { margin:8px 0 0; padding-left:16px; }
+.tracks li { font-size:13px; margin:2px 0; }
+.file input { display:none; }
+.file span { display:inline-block; padding:6px 10px; border:1px solid #cfd3d8; border-radius:8px; background:#f6f7f9; cursor:pointer; }
+.transport { display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
