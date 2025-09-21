@@ -1,4 +1,3 @@
-// src/pages/PracticeMixPage.tsx
 import { useEffect, useRef, useState } from 'react'
 import DeviceSelect from '../components/DeviceSelect'
 import { useMediaRecorder } from '../hooks/useMediaRecorder'
@@ -8,28 +7,27 @@ import { Midi } from '@tonejs/midi'
 import { renderMidiOnServer } from '../lib/midiServer'
 
 type TrackMeta = { name: string; channel?: number; instrument?: string; notes: number }
-
-// NEW: 코드 힌트용 타입(마커에서 추출)
-type ChordCue = { time: number; text: string }
+type ChordCue = { time: number; text: string }   // 코드 힌트용
 
 export default function PracticeMixPage() {
-  /* ========== 입력 장치 & 녹음 ========== */
+  /* ===== 입력 장치 & 녹음 ===== */
   const [deviceId, setDeviceId] = useState<string>('')
   const { recording, blobUrl, start, stop, error: recErr } = useMediaRecorder(deviceId || undefined)
 
-  /* ========== MIDI 로딩 & 렌더링 ========== */
+  /* ===== MIDI 로딩/렌더링 ===== */
   const [midiFile, setMidiFile] = useState<File | null>(null)
-  const [midiAudioUrl, setMidiAudioUrl] = useState<string | null>(null) // 서버 렌더 WAV
+  const [midiAudioUrl, setMidiAudioUrl] = useState<string | null>(null) // 서버 WAV
   const [midiBuffer, setMidiBuffer] = useState<AudioBuffer | null>(null) // 믹싱용
   const [midiTracks, setMidiTracks] = useState<TrackMeta[]>([])
   const [rendering, setRendering] = useState(false)
 
-  // NEW: MIDI 메타(템포/박자) + 코드 마커
+  // 메타정보(템포/박자) & 코드 마커
   const [tempoBpm, setTempoBpm] = useState<number>(100)
   const [timeSig, setTimeSig] = useState<[number, number]>([4, 4])
   const [chordCues, setChordCues] = useState<ChordCue[]>([])
 
-  /* ========== 플레이어/트랜스포트 ========== */
+  /* ===== 플레이어/트랜스포트 ===== */
+  // ⚠️ 보이는 <audio> 한 벌을 트랜스포트가 그대로 제어하도록 통합
   const midiEl = useRef<HTMLAudioElement>(null)
   const bassEl = useRef<HTMLAudioElement>(null)
   const [duration, setDuration] = useState(0)
@@ -37,26 +35,23 @@ export default function PracticeMixPage() {
   const [playing, setPlaying] = useState(false)
   const rAF = useRef<number | null>(null)
 
-  /* ========== 믹서 컨트롤 ========== */
+  /* ===== 믹서 컨트롤 ===== */
   const [midiVol, setMidiVol] = useState(0.9)
   const [bassVol, setBassVol] = useState(1.0)
   const [playMidi, setPlayMidi] = useState(true)
   const [playBass, setPlayBass] = useState(true)
   const [loop, setLoop] = useState(false)
 
-  /* ========== 합치기 결과 ========== */
+  /* ===== 합치기 결과 ===== */
   const [mergedUrl, setMergedUrl] = useState<string | null>(null)
 
-  /* ========== 녹음 UX 옵션 ========== */
-  // NEW: “베이스만 녹음” 토글 & 카운트인 길이(4박)
-  const [bassOnly, setBassOnly] = useState(false)
+  /* ===== 녹음 UX 옵션 ===== */
+  const [bassOnly, setBassOnly] = useState(false) // 베이스만 녹음(미디 미재생)
   const COUNTIN_BEATS = 4
+  const [nowChord, setNowChord] = useState<string>('')   // 현재 코드
+  const [nextChord, setNextChord] = useState<string>('') // 다음 코드
 
-  // NEW: 현재/다음 코드 힌트
-  const [nowChord, setNowChord] = useState<string>('')
-  const [nextChord, setNextChord] = useState<string>('')
-
-  /* ========== MIDI 선택 → 서버 렌더 + 메타 추출 + 브라우저 디코드 ========== */
+  /* ================= MIDI 선택 → 서버 렌더 + 메타 추출 + 디코드 ================= */
   async function handleMidiFile(file: File) {
     setMidiFile(file)
     setMidiAudioUrl(null)
@@ -67,58 +62,48 @@ export default function PracticeMixPage() {
 
     setRendering(true)
     try {
-      // (A) 클라이언트에서 메타 파싱(템포/박자/트랙/마커)
+      // (A) 클라에서 메타 추출(템포/박자/트랙/마커)
       const arr = await file.arrayBuffer()
       const midi = new Midi(arr)
 
-      // 템포(첫 항목) & 박자(첫 항목)
       const bpm = midi.header.tempos?.[0]?.bpm ?? 100
+      setTempoBpm(bpm)
 
-      // timeSignature를 안전하게 튜플로 캐스팅
       const tsArr = midi.header.timeSignatures?.[0]?.timeSignature as number[] | undefined
-      const tsTuple: [number, number] = (Array.isArray(tsArr) && tsArr.length >= 2)
-        ? [tsArr[0], tsArr[1]]
-        : [4, 4]
-      setTimeSig(tsTuple)
+      const ts: [number, number] = (Array.isArray(tsArr) && tsArr.length >= 2) ? [tsArr[0], tsArr[1]] : [4, 4]
+      setTimeSig(ts)
 
-      // 트랙 메타
       const tks: TrackMeta[] = midi.tracks.map(t => ({
         name: t.name || '(no name)',
         channel: t.channel,
-        instrument:
-          t.instrument?.name ||
-          (t.instrument?.number != null ? `program ${t.instrument.number}` : undefined),
+        instrument: t.instrument?.name || (t.instrument?.number != null ? `program ${t.instrument.number}` : undefined),
         notes: t.notes.length,
       }))
       setMidiTracks(tks)
 
-      // 코드 마커 추출(가능한 경우만)
-      // - 트랙명에 'chord' 포함 or meta text/marker 이벤트에서 텍스트
+      // 코드 마커(트랙명: chord/guide, 메타 marker/text)
       const cues: ChordCue[] = []
       midi.tracks.forEach(t => {
         const lower = (t.name || '').toLowerCase()
-        const rawEvents = (t as any).events as any[] | undefined
-        if (!rawEvents) return
+        const raw = (t as any).events as any[] | undefined
+        if (!raw) return
         if (lower.includes('chord') || lower.includes('guide') || lower.includes('marker')) {
-          rawEvents.forEach(ev => {
+          raw.forEach(ev => {
             if (ev.type === 'meta' && (ev.subtype === 'marker' || ev.subtype === 'text')) {
               const txt = (ev.text || '').trim()
-              if (txt) {
-                const time = midi.header.ticksToSeconds(ev.ticks || 0)
-                cues.push({ time, text: txt })
-              }
+              if (txt) cues.push({ time: midi.header.ticksToSeconds(ev.ticks || 0), text: txt })
             }
           })
         }
       })
-      cues.sort((a, b) => a.time - b.time)
+      cues.sort((a,b) => a.time - b.time)
       setChordCues(cues)
 
-      // (B) 서버 FluidSynth로 WAV 렌더
+      // (B) 서버에서 FluidSynth로 WAV 렌더
       const { wavUrl } = await renderMidiOnServer(file)
       setMidiAudioUrl(wavUrl)
 
-      // (C) 믹싱용 AudioBuffer로 디코드
+      // (C) 믹싱용 Buffer 로 디코드
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
       const wavArr = await (await fetch(wavUrl)).arrayBuffer()
       const buf = await ctx.decodeAudioData(wavArr.slice(0))
@@ -129,8 +114,7 @@ export default function PracticeMixPage() {
     }
   }
 
-  /* ========== 메트로놈(카운트인) ========== */
-  // NEW: WebAudio로 4박 카운트인을 재생하는 함수
+  /* ================= 카운트인(4박) ================= */
   async function playCountIn(beats: number, bpm: number) {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
     const beat = 60 / Math.max(40, Math.min(300, bpm))
@@ -139,7 +123,6 @@ export default function PracticeMixPage() {
       const osc = ctx.createOscillator()
       const g = ctx.createGain()
       osc.type = 'sine'
-      // 1박은 높은 피치, 나머지는 낮은 피치
       osc.frequency.value = i === 0 ? 1200 : 800
       g.gain.value = 0
       osc.connect(g).connect(ctx.destination)
@@ -150,40 +133,46 @@ export default function PracticeMixPage() {
       osc.start(ts)
       osc.stop(ts + 0.2)
     }
-    // 카운트인이 끝나는 시점을 반환
-    return new Promise<number>(resolve => {
+    return new Promise<void>((resolve) => {
       const endAt = t0 + beats * beat
-      const timer = setTimeout(() => {
-        ctx.close().finally(() => resolve(endAt))
-      }, Math.ceil((endAt - ctx.currentTime) * 1000) + 10)
+      const ms = Math.ceil((endAt - ctx.currentTime) * 1000) + 10
+      setTimeout(() => { ctx.close().finally(()=>resolve()) }, ms)
     })
   }
 
-  /* ========== 녹음: 카운트인 후 동시 시작 ========== */
-  // NEW: “녹음 시작” 버튼에 연결
+  /* ================= 재생 잠금 해제(브라우저 오토플레이 정책 대응) ================= */
+  async function ensureUnlocked() {
+    const el = midiEl.current
+    if (!el) return
+    const wasMuted = el.muted
+    el.muted = true
+    try {
+      await el.play().catch(()=>{})
+      el.pause()
+    } finally {
+      el.muted = wasMuted
+    }
+  }
+
+  /* ================= 녹음 시작(카운트인 후 동시 스타트) ================= */
   async function startRecordingFlow() {
     if (!midiAudioUrl && !bassOnly) {
       alert('MIDI 파일을 먼저 선택하세요.')
       return
     }
-
-    // 1) 녹음 먼저 시작(카운트인도 녹음에 들어가도 무방; 헤드폰 권장)
-    if (!recording) start()
-
-    // 2) 카운트인 4박
+    if (!recording) await start()
+    await ensureUnlocked()
     await playCountIn(COUNTIN_BEATS, tempoBpm)
 
-    // 3) 카운트인 종료 시점에 동시 시작
     if (!bassOnly && midiEl.current) {
       midiEl.current.currentTime = 0
-      midiEl.current.play().catch(() => {})
+      midiEl.current.play().catch(()=>{})
     }
-    // 베이스 모니터 재생은 사용자가 컨트롤러에서 결정
     setPlaying(true)
     if (!rAF.current) tick()
   }
 
-  /* ========== 재생/정지/동기화 ========== */
+  /* ================= 트랜스포트 & 동기 ================= */
   function syncVolumesAndMutes() {
     if (midiEl.current) {
       midiEl.current.volume = midiVol
@@ -199,19 +188,19 @@ export default function PracticeMixPage() {
   function tick() {
     const t = Math.max(midiEl.current?.currentTime ?? 0, bassEl.current?.currentTime ?? 0)
     setPosition(t)
-    // NEW: 코드 힌트 갱신
+    // 코드 힌트 업데이트
     if (chordCues.length > 0) {
-      const idx = chordCues.findIndex((c, i) => t >= c.time && (i === chordCues.length - 1 || t < chordCues[i + 1].time))
-      if (idx >= 0) {
-        setNowChord(chordCues[idx].text)
-        setNextChord(chordCues[idx + 1]?.text ?? '')
+      const i = chordCues.findIndex((c, idx) => t >= c.time && (idx === chordCues.length - 1 || t < chordCues[idx + 1].time))
+      if (i >= 0) {
+        setNowChord(chordCues[i].text)
+        setNextChord(chordCues[i + 1]?.text ?? '')
       }
     }
     rAF.current = requestAnimationFrame(tick)
   }
   function play() {
-    midiEl.current?.play().catch(() => {})
-    bassEl.current?.play().catch(() => {})
+    midiEl.current?.play().catch(()=>{})
+    bassEl.current?.play().catch(()=>{})
     setPlaying(true)
     if (!rAF.current) tick()
   }
@@ -234,7 +223,7 @@ export default function PracticeMixPage() {
     setPosition(sec)
   }
 
-  // duration 업데이트 & 끝 처리
+  // duration/ended 바인딩
   useEffect(() => {
     function updateDur() {
       const d1 = midiEl.current?.duration ?? 0
@@ -257,7 +246,7 @@ export default function PracticeMixPage() {
   useEffect(() => { syncVolumesAndMutes() },
     [midiVol, bassVol, playMidi, playBass, loop, midiAudioUrl, blobUrl])
 
-  /* ========== 합치기(WAV) ========== */
+  /* ================= 합치기(WAV) ================= */
   async function mergeAndExport() {
     if (!midiBuffer || !blobUrl) return
     if (mergedUrl) URL.revokeObjectURL(mergedUrl)
@@ -278,7 +267,7 @@ export default function PracticeMixPage() {
     return () => { if (mergedUrl) URL.revokeObjectURL(mergedUrl) }
   }, [mergedUrl])
 
-  /* ========== 렌더 ========== */
+  /* ================= 렌더 ================= */
   return (
     <div className="pmx-wrap">
       {/* 입력 장치 */}
@@ -293,26 +282,30 @@ export default function PracticeMixPage() {
         {recErr && <div className="warn">녹음 오류: {recErr}</div>}
       </section>
 
-      {/* MIDI 파일 (미리듣기 + 트랙/템포/코드 정보) */}
+      {/* MIDI 파일 (미리듣기 + 트랙/템포/코드) */}
       <section className="pmx-panel">
         <h3>🎼 MIDI 파일</h3>
         <div className="row">
           <label className="file">
-            <input type="file" accept=".mid,.midi" onChange={e => {
-              const f = e.target.files?.[0]; if (f) handleMidiFile(f)
-            }}/>
+            <input type="file" accept=".mid,.midi"
+                   onChange={e => { const f = e.target.files?.[0]; if (f) handleMidiFile(f) }} />
             <span>파일 선택</span>
           </label>
           {midiFile && <span className="hint">{midiFile.name}</span>}
           {rendering && <span className="hint">서버 렌더링 중…</span>}
         </div>
 
-        {/* 음원 미리듣기 */}
+        {/* 음원 미리듣기(= 트랜스포트 대상) */}
         <div className="preview" style={{marginTop:8}}>
-          {midiAudioUrl ? <audio src={midiAudioUrl} controls /> : <div className="thin">파일을 선택하세요</div>}
+          {midiAudioUrl
+            ? <audio ref={midiEl} src={midiAudioUrl} preload="metadata" controls
+                     onLoadedMetadata={()=>syncVolumesAndMutes()}
+                     onPlay={()=>syncVolumesAndMutes()}
+                     onError={(e)=>console.warn('MIDI audio error', e)} />
+            : <div className="thin">파일을 선택하세요</div>}
         </div>
 
-        {/* 트랙/메타/코드 정보 */}
+        {/* 메타/트랙/코드 정보 */}
         {(midiTracks.length > 0 || chordCues.length > 0) && (
           <details className="tracks" style={{marginTop:8}}>
             <summary>트랙 정보 보기</summary>
@@ -335,7 +328,7 @@ export default function PracticeMixPage() {
         )}
       </section>
 
-      {/* 베이스 녹음 (카운트인/옵션) */}
+      {/* 베이스 녹음 */}
       <section className="pmx-panel">
         <h3>🎙 베이스 녹음</h3>
         <div className="row" style={{gap:12, alignItems:'center'}}>
@@ -348,7 +341,7 @@ export default function PracticeMixPage() {
           </label>
         </div>
 
-        {/* 코드 힌트 라인 */}
+        {/* 코드 힌트 */}
         {chordCues.length > 0 && (
           <div style={{marginTop:8, padding:'6px 8px', background:'#f7f7f9', border:'1px solid #eee', borderRadius:6}}>
             <strong>코드 힌트:</strong>{' '}
@@ -358,29 +351,10 @@ export default function PracticeMixPage() {
         )}
       </section>
 
-      {/* 트랜스포트 & 믹서 (기존 유지) */}
+      {/* Bass 미리듣기(= 트랜스포트 대상) */}
       <section className="pmx-panel">
-        <h3>▶︎ 트랜스포트 & 믹서</h3>
-
-        {/* 숨김 플레이어 요소(트랜스포트가 제어) */}
-        <audio ref={midiEl} src={midiAudioUrl ?? undefined} preload="metadata" />
-        <audio ref={bassEl} src={blobUrl ?? undefined} preload="metadata" />
-
+        <h3>🎚 Bass 미리듣기 & 믹서</h3>
         <div className="mixer">
-          <div className="ch">
-            <div className="ch-title">MIDI</div>
-            <div className="row">
-              <label className="row"><input type="checkbox" checked={playMidi} onChange={e=>setPlayMidi(e.target.checked)} /> 재생</label>
-            </div>
-            <div className="col">
-              <input type="range" min={0} max={1} step={0.01} value={midiVol} onChange={e=>setMidiVol(Number(e.target.value))}/>
-              <div className="hint">볼륨 {Math.round(midiVol*100)}%</div>
-            </div>
-            <div className="preview">
-              {midiAudioUrl ? <audio src={midiAudioUrl} controls /> : <div className="thin">파일을 선택하세요</div>}
-            </div>
-          </div>
-
           <div className="ch">
             <div className="ch-title">Bass</div>
             <div className="row">
@@ -391,7 +365,12 @@ export default function PracticeMixPage() {
               <div className="hint">볼륨 {Math.round(bassVol*100)}%</div>
             </div>
             <div className="preview">
-              {blobUrl ? <audio src={blobUrl} controls /> : <div className="thin">녹음 후 재생 가능</div>}
+              {blobUrl
+                ? <audio ref={bassEl} src={blobUrl} preload="metadata" controls
+                         onLoadedMetadata={()=>syncVolumesAndMutes()}
+                         onPlay={()=>syncVolumesAndMutes()}
+                         onError={(e)=>console.warn('Bass audio error', e)} />
+                : <div className="thin">녹음 후 재생 가능</div>}
             </div>
           </div>
         </div>
@@ -429,13 +408,13 @@ export default function PracticeMixPage() {
             <div><a className="btn" href={mergedUrl} download={makeDownloadName(midiFile?.name)}>⬇ 합친 결과 다운로드 (WAV)</a></div>
           </div>
         )}
-        <div className="tiny">* 표준 .mid에는 오디오가 포함되지 않으므로 합친 결과는 WAV로 제공합니다.</div>
+        <div className="tiny">* .mid에는 오디오가 없으므로 합친 결과는 WAV로 제공합니다.</div>
       </section>
     </div>
   )
 }
 
-/* ====== 유틸 ====== */
+/* ===== 유틸 ===== */
 function makeDownloadName(midiName?: string) {
   const base = midiName?.replace(/\.(mid|midi)$/i, '') || 'result'
   return `${base}_with_bass.wav`
