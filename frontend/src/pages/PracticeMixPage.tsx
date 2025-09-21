@@ -7,7 +7,7 @@ import { Midi } from '@tonejs/midi'
 import { renderMidiOnServer } from '../lib/midiServer'
 
 type TrackMeta = { name: string; channel?: number; instrument?: string; notes: number }
-type ChordCue = { time: number; text: string }   // 코드 힌트용
+type ChordCue = { time: number; text: string }
 
 export default function PracticeMixPage() {
   /* ===== 입력 장치 & 녹음 ===== */
@@ -27,7 +27,6 @@ export default function PracticeMixPage() {
   const [chordCues, setChordCues] = useState<ChordCue[]>([])
 
   /* ===== 플레이어/트랜스포트 ===== */
-  // ⚠️ 보이는 <audio> 한 벌을 트랜스포트가 그대로 제어하도록 통합
   const midiEl = useRef<HTMLAudioElement>(null)
   const bassEl = useRef<HTMLAudioElement>(null)
   const [duration, setDuration] = useState(0)
@@ -50,6 +49,54 @@ export default function PracticeMixPage() {
   const COUNTIN_BEATS = 4
   const [nowChord, setNowChord] = useState<string>('')   // 현재 코드
   const [nextChord, setNextChord] = useState<string>('') // 다음 코드
+
+  /* ===== 베이스 트리밍(카운트인 제거) ===== */
+  const [bassTrimUrl, setBassTrimUrl] = useState<string | null>(null)
+  const [bassBuffer, setBassBuffer] = useState<AudioBuffer | null>(null)
+
+  // blobUrl(원본 녹음)이 생기면 → 템포 기반으로 카운트인(4박) 만큼 앞을 잘라서 새 URL/버퍼 생성
+  useEffect(() => {
+    let revoked: string | null = null
+    ;(async () => {
+      if (!blobUrl) { setBassTrimUrl(null); setBassBuffer(null); return }
+      try {
+        // 1) 원본 디코드
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+        const arr = await (await fetch(blobUrl)).arrayBuffer()
+        const src = await ctx.decodeAudioData(arr.slice(0))
+
+        // 2) 트리밍 구간 계산(4박)
+        const offsetSec = COUNTIN_BEATS * 60 / Math.max(40, Math.min(300, tempoBpm))
+        const sr = src.sampleRate
+        const startSample = Math.floor(offsetSec * sr)
+        const totalSamples = src.length
+        const trimLen = Math.max(0, totalSamples - startSample)
+
+        // 3) 앞부분 제거된 새 버퍼 생성
+        const out = ctx.createBuffer(src.numberOfChannels, trimLen, sr)
+        for (let ch = 0; ch < src.numberOfChannels; ch++) {
+          const srcData = src.getChannelData(ch)
+          const dstData = out.getChannelData(ch)
+          dstData.set(srcData.subarray(startSample))
+        }
+        await ctx.close()
+
+        // 4) 미리듣기용 URL & 믹싱용 버퍼 업데이트
+        const wavBlob = audioBufferToWavBlob(out)
+        const url = URL.createObjectURL(wavBlob)
+        setBassTrimUrl(url)
+        setBassBuffer(out)
+        revoked = url
+      } catch (e) {
+        console.warn('trim bass failed:', e)
+        setBassTrimUrl(null)
+        setBassBuffer(null)
+      }
+    })()
+    return () => {
+      if (revoked) URL.revokeObjectURL(revoked)
+    }
+  }, [blobUrl, tempoBpm])
 
   /* ================= MIDI 선택 → 서버 렌더 + 메타 추출 + 디코드 ================= */
   async function handleMidiFile(file: File) {
@@ -140,7 +187,7 @@ export default function PracticeMixPage() {
     })
   }
 
-  /* ================= 재생 잠금 해제(브라우저 오토플레이 정책 대응) ================= */
+  /* ================= 재생 잠금 해제(오토플레이 정책) ================= */
   async function ensureUnlocked() {
     const el = midiEl.current
     if (!el) return
@@ -188,7 +235,6 @@ export default function PracticeMixPage() {
   function tick() {
     const t = Math.max(midiEl.current?.currentTime ?? 0, bassEl.current?.currentTime ?? 0)
     setPosition(t)
-    // 코드 힌트 업데이트
     if (chordCues.length > 0) {
       const i = chordCues.findIndex((c, idx) => t >= c.time && (idx === chordCues.length - 1 || t < chordCues[idx + 1].time))
       if (i >= 0) {
@@ -241,23 +287,37 @@ export default function PracticeMixPage() {
       a?.removeEventListener('loadedmetadata', updateDur)
       b?.removeEventListener('loadedmetadata', updateDur)
     }
-  }, [midiAudioUrl, blobUrl, loop])
+  }, [midiAudioUrl, bassTrimUrl, loop])
 
   useEffect(() => { syncVolumesAndMutes() },
-    [midiVol, bassVol, playMidi, playBass, loop, midiAudioUrl, blobUrl])
+    [midiVol, bassVol, playMidi, playBass, loop, midiAudioUrl, bassTrimUrl])
 
   /* ================= 합치기(WAV) ================= */
   async function mergeAndExport() {
-    if (!midiBuffer || !blobUrl) return
+    if (!midiBuffer) return
     if (mergedUrl) URL.revokeObjectURL(mergedUrl)
     setMergedUrl(null)
 
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
-    const arr = await (await fetch(blobUrl)).arrayBuffer()
-    const bassBuf = await ctx.decodeAudioData(arr.slice(0))
-    await ctx.close()
+    // 베이스: 트리밍된 버퍼가 있으면 그걸 사용 (없으면 녹음 원본을 트리밍해서라도 사용)
+    let bass: AudioBuffer | null = bassBuffer
+    if (!bass && blobUrl) {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+      const arr = await (await fetch(blobUrl)).arrayBuffer()
+      const src = await ctx.decodeAudioData(arr.slice(0))
+      const offsetSec = COUNTIN_BEATS * 60 / Math.max(40, Math.min(300, tempoBpm))
+      const sr = src.sampleRate
+      const startSample = Math.floor(offsetSec * sr)
+      const trimLen = Math.max(0, src.length - startSample)
+      const out = ctx.createBuffer(src.numberOfChannels, trimLen, sr)
+      for (let ch = 0; ch < src.numberOfChannels; ch++) {
+        out.getChannelData(ch).set(src.getChannelData(ch).subarray(startSample))
+      }
+      await ctx.close()
+      bass = out
+    }
+    if (!bass) return
 
-    const mixed = await mixBuffersToAudioBuffer(midiBuffer, bassBuf, { sampleRate: 48000, fadeOutSec: 0.03 })
+    const mixed = await mixBuffersToAudioBuffer(midiBuffer, bass, { sampleRate: 48000, fadeOutSec: 0.03 })
     const wav = audioBufferToWavBlob(mixed)
     const url = URL.createObjectURL(wav)
     setMergedUrl(url)
@@ -282,7 +342,7 @@ export default function PracticeMixPage() {
         {recErr && <div className="warn">녹음 오류: {recErr}</div>}
       </section>
 
-      {/* MIDI 파일 (미리듣기 + 트랙/템포/코드) */}
+      {/* MIDI 파일 */}
       <section className="pmx-panel">
         <h3>🎼 MIDI 파일</h3>
         <div className="row">
@@ -351,7 +411,7 @@ export default function PracticeMixPage() {
         )}
       </section>
 
-      {/* Bass 미리듣기(= 트랜스포트 대상) */}
+      {/* Bass 미리듣기 & 믹서 */}
       <section className="pmx-panel">
         <h3>🎚 Bass 미리듣기 & 믹서</h3>
         <div className="mixer">
@@ -365,19 +425,20 @@ export default function PracticeMixPage() {
               <div className="hint">볼륨 {Math.round(bassVol*100)}%</div>
             </div>
             <div className="preview">
-              {blobUrl
-                ? <audio ref={bassEl} src={blobUrl} preload="metadata" controls
+              {(bassTrimUrl || blobUrl)
+                ? <audio ref={bassEl} src={(bassTrimUrl ?? blobUrl)!} preload="metadata" controls
                          onLoadedMetadata={()=>syncVolumesAndMutes()}
                          onPlay={()=>syncVolumesAndMutes()}
                          onError={(e)=>console.warn('Bass audio error', e)} />
                 : <div className="thin">녹음 후 재생 가능</div>}
+              {bassTrimUrl && <div className="tiny" style={{marginTop:4}}>※ 카운트인 {COUNTIN_BEATS}박 구간을 자동 제거했습니다.</div>}
             </div>
           </div>
         </div>
 
         {/* 트랜스포트 */}
         <div className="transport" style={{marginTop:12}}>
-          <button className="btn" onClick={playing ? pause : play} disabled={!midiAudioUrl && !blobUrl}>
+          <button className="btn" onClick={playing ? pause : play} disabled={!midiAudioUrl && !bassTrimUrl && !blobUrl}>
             {playing ? '⏸ 일시정지' : '▶︎ 재생'}
           </button>
           <button className="btn" onClick={stopAll}>⏹ 정지</button>
@@ -399,7 +460,7 @@ export default function PracticeMixPage() {
       {/* 합치기 & 다운로드 */}
       <section className="pmx-panel">
         <h3>⬇️ 합치기 & 다운로드</h3>
-        <button className="btn" onClick={mergeAndExport} disabled={!midiBuffer || !blobUrl}>
+        <button className="btn" onClick={mergeAndExport} disabled={!midiBuffer || (!bassBuffer && !blobUrl)}>
           음원 합치기(WAV 생성)
         </button>
         {mergedUrl && (
