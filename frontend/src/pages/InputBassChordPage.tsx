@@ -324,7 +324,9 @@ async function startGenerate(symbols: string[]) {
       genre: genre || 'rock',
       progression: symbols,
       tempo,
-      options: {}, // 확장 포인트
+      options: {
+        repeats: 6,
+      }, // 확장 포인트
     })
     setGenId(jobId)
 
