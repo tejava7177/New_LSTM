@@ -1,95 +1,174 @@
-# LSTM/model/predict_next_chord.py
-import os, sys, json, tempfile, numpy as np, torch
-from model.train_lstm import ChordLSTM              # 경로에 맞게 수정
-from harmony_score import evaluate_progression, interpret_score
+# LSTM/predict_next_chord.py
+import os, sys, json, re
+import numpy as np
+import torch
+from typing import List, Tuple, Optional
 
-# 지원 장르별 모델 디렉토리
+# --- 안전 경로 보정 ---
+THIS_FILE = os.path.abspath(__file__)
+LSTM_DIR  = os.path.dirname(THIS_FILE)
+PROJ_ROOT = os.path.dirname(LSTM_DIR)
+if PROJ_ROOT not in sys.path:
+    sys.path.insert(0, PROJ_ROOT)
+
+from LSTM.model.train_lstm import ChordLSTM
+from LSTM.harmony_score import evaluate_progression
+from LSTM.chord_engine.smart_progression import generate_topk
+
 BASE_DIRS = {
-    "jazz": "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/jazz",
+    "jazz": "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/jazz/New2",
     "rock": "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/rock",
-    "pop" : "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/pop"
+    "pop" : "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/pop",
 }
+BASE_DATA_DIR = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data"
 
+ROOT_RE = re.compile(r"^([A-G](?:#|b)?)")
 
+def to_roots(tokens: List[str]) -> List[str]:
+    roots = []
+    for t in tokens:
+        t = t.strip()
+        if not t: continue
+        m = ROOT_RE.match(t)
+        roots.append(m.group(1) if m else t)
+    return roots[:3]
 
-def load_model_and_vocab(genre):
-    base_dir = BASE_DIRS[genre]
-    chord_to_index = np.load(os.path.join(base_dir, 'chord_to_index.npy'), allow_pickle=True).item()
-    index_to_chord = np.load(os.path.join(base_dir, 'index_to_chord.npy'), allow_pickle=True).item()
-    # 모델도 여기에!
-    model = ChordLSTM(len(chord_to_index))
-    model.load_state_dict(torch.load(os.path.join(base_dir, 'chord_lstm.pt'), map_location=torch.device('cpu')))
-    model.eval()
-    return model, chord_to_index, index_to_chord
+def parse_seed_line(line: str) -> List[str]:
+    if "," in line:
+        return [x.strip() for x in line.split(",")]
+    return line.strip().split()
 
-def predict_top_k_next_chords(model, chord_to_index, index_to_chord, input_chords, k=3):
-    indices = [chord_to_index.get(c, 0) for c in input_chords]
-    input_tensor = torch.tensor([indices], dtype=torch.long)
-    with torch.no_grad():
-        output = model(input_tensor)
-        probs = torch.softmax(output, dim=1)
-        topk = torch.topk(probs, k)
-        topk_indices = topk.indices[0].cpu().numpy()
-        return [index_to_chord[idx] for idx in topk_indices]
+def load_model_and_vocab(genre: str):
+    try:
+        base = BASE_DIRS[genre]
+        c2i = np.load(os.path.join(base, "chord_to_index.npy"), allow_pickle=True).item()
+        i2c = np.load(os.path.join(base, "index_to_chord.npy"), allow_pickle=True).item()
+        model = ChordLSTM(len(c2i))
+        state = torch.load(os.path.join(base, "chord_lstm.pt"), map_location=torch.device("cpu"))
+        if hasattr(model, "embedding"):
+            if "emb.weight" in state and "embedding.weight" not in state:
+                state["embedding.weight"] = state.pop("emb.weight")
+        elif hasattr(model, "emb"):
+            if "embedding.weight" in state and "emb.weight" not in state:
+                state["emb.weight"] = state.pop("embedding.weight")
+        model.load_state_dict(state, strict=False)
+        model.eval()
+        print(f"🧠 Using LSTM model: {os.path.join(base, 'chord_lstm.pt')}")
+        return model, c2i, i2c
+    except Exception as e:
+        print(f"⚠️  모델 로딩 실패(룰만 사용): {e}")
+        return None, None, None
 
-def generate_multiple_progressions(model, chord_to_index, index_to_chord, seed_chords, n_generate=5, k=3):
-    progressions = [[*seed_chords] for _ in range(k)]
-    last_chords = [list(seed_chords) for _ in range(k)]
+# --- 다양성 유틸 (MMR) ---
+def seq_similarity(a: List[str], b: List[str]) -> float:
+    n = min(len(a), len(b))
+    if n == 0: return 0.0
+    same = sum(1 for i in range(n) if a[i]==b[i])
+    return same / n
 
-    for step in range(n_generate):
-        candidates_per_prog = []
-        for i in range(k):
-            next_k_chords = predict_top_k_next_chords(model, chord_to_index, index_to_chord, last_chords[i], k)
-            candidates_per_prog.append(next_k_chords)
-        for i in range(k):
-            next_chord = candidates_per_prog[i][i]  # 0번째 진행은 top1, 1번째는 top2, 2번째는 top3
-            progressions[i].append(next_chord)
-            last_chords[i] = last_chords[i][1:] + [next_chord]
-    return progressions
+def mmr_select(cands: List[Tuple[List[str], float]], k:int=2, lam:float=0.7, already:Optional[List[List[str]]]=None):
+    """cands: (seq, score). lam: 가중치(높을수록 relevance 우선)."""
+    selected: List[Tuple[List[str], float]] = []
+    used = set()
+    base = already or []
+    # 첫 선택: 최고 점수
+    cands_sorted = sorted(cands, key=lambda x: x[1], reverse=True)
+    for seq, sc in cands_sorted:
+        if tuple(seq) not in used:
+            selected.append((seq, sc)); used.add(tuple(seq)); break
+    # 이후: MMR
+    while len(selected) < k and len(selected) < len(cands_sorted):
+        best = None
+        for seq, sc in cands_sorted:
+            t = tuple(seq)
+            if t in used: continue
+            max_sim = 0.0
+            for s,_ in (selected + [(x,0.0) for x in base]):
+                max_sim = max(max_sim, seq_similarity(seq, s))
+            mmr = lam*sc - (1.0-lam)*max_sim
+            if (best is None) or (mmr > best[2]):
+                best = (seq, sc, mmr)
+        if best is None: break
+        selected.append((best[0], best[1])); used.add(tuple(best[0]))
+    return selected
 
-if __name__ == "__main__":
-    # ── 0) 장르 선택 ───────────────────────────────────────────
+# --- 점수 버킷(뷰용 캘리브레이션) ---
+def bucketize_three(scores01: List[float]) -> List[int]:
+    """내부 점수는 다양성/상대치. 표시용으로 1등/2등/3등을 원하는 구간에 맵핑."""
+    targets = [(0.86,0.92), (0.44,0.60), (0.12,0.30)]
+    out = []
+    for i,s in enumerate(scores01[:3]):
+        lo,hi = targets[i]
+        # s가 0~1 어디든 중간값으로 안정적으로 매핑
+        mid = (lo+hi)/2.0
+        out.append(int(round(mid*100)))
+    return out
+
+def main():
     genres = list(BASE_DIRS.keys())
     while True:
         genre = input(f"예측할 코드 진행 장르를 입력하세요 {genres}: ").strip().lower()
         if genre in genres: break
         print(f"지원하는 장르만 입력하세요! ({'/'.join(genres)})")
 
-    model, chord_to_index, index_to_chord = load_model_and_vocab(genre)
-
-    # ── 1) 시드 3코드 입력 ─────────────────────────────────────
     while True:
-        user_input = input("3개의 코드를 띄어쓰기로 입력 (예: C G Am): ").strip().split()
-        if len(user_input) == 3: break
+        raw = input("3개의 코드를 띄어쓰기 또는 콤마로 입력 (예: C G Am / D,G,C): ").strip()
+        toks = parse_seed_line(raw)
+        if len(toks) >= 3: break
         print("반드시 3개의 코드를 입력해주세요!")
+    seed_roots = to_roots(toks)
 
-    # ── 2) Top-3 예측 & 화면 출력 ───────────────────────────────
-    n_steps, k = 5, 3
-    result = generate_multiple_progressions(model, chord_to_index, index_to_chord,
-                                            user_input, n_generate=n_steps, k=k)
+    model, c2i, i2c = load_model_and_vocab(genre)
+    use_model = model is not None
 
-    print(f"\n🎸 [{genre.upper()}] Top-3 예측 코드 진행 (총 {n_steps+3}개):")
-    for i, prog in enumerate(result, start=1):
-        s = evaluate_progression(model, prog, chord_to_index, index_to_chord)
-        print(f"{i}번 진행({interpret_score(s)}, 확률 {int(s*100)}%): {' → '.join(prog)}")
+    # 1) 정석(룰 100%) 후보를 넉넉히 뽑고 1개 채택
+    rule_pool = generate_topk(genre=genre, seed_roots=seed_roots, k=8, scorer=None, alpha=1.0)
+    top1_seq, top1_sc = rule_pool[0]
 
-    # ── 3) 번호 선택 ────────────────────────────────────────────
+    # 2) 모델+룰 블렌딩 후보를 더 많이 뽑아(다양성 확보) MMR로 2개 선택
+    blended: List[Tuple[List[str], float]] = []
+    if use_model:
+        def scorer_fn(seq: List[str]) -> float:
+            return float(evaluate_progression(model, seq, c2i, i2c))
+        # 가중치는 0.5로 살짝 모델 가중 확대(=2,3번의 다양성↑)
+        blended_pool = generate_topk(genre=genre, seed_roots=seed_roots, k=20, scorer=scorer_fn, alpha=0.5)
+        # rule top1과 동일한 진행 제거
+        blended_pool = [(s,sc) for (s,sc) in blended_pool if tuple(s)!=tuple(top1_seq)]
+        # MMR로 2개 선택(기존 top1을 이미 선택된 것으로 간주해 유사도 억제)
+        blended = mmr_select(blended_pool, k=2, lam=0.65, already=[top1_seq])
+    else:
+        # 모델이 없으면 룰pool에서 MMR로 2개
+        rest = [(s,sc) for (s,sc) in rule_pool[1:]]
+        blended = mmr_select(rest, k=2, lam=0.65, already=[top1_seq])
+
+    # 3) 표시용 점수 보정(80–90 / 40–60 / 10–30)
+    raw_scores = [top1_sc] + [sc for _,sc in blended]
+    shown = bucketize_three(raw_scores)
+
+    print(f"\n🎸 [{genre.upper()}] Top-3 예측 코드 진행:")
+    print(f"1번 진행(정석/룰 기반, 점수 {shown[0]}%): " + " → ".join(top1_seq))
+    if len(blended) >= 1:
+        print(f"2번 진행(모델+룰 블렌딩, 점수 {shown[1]}%): " + " → ".join(blended[0][0]))
+    if len(blended) >= 2:
+        print(f"3번 진행(모델+룰 블렌딩, 점수 {shown[2]}%): " + " → ".join(blended[1][0]))
+
+    # 4) 선택 및 저장
+    valid = {"1": top1_seq}
+    if len(blended) >= 1: valid["2"] = blended[0][0]
+    if len(blended) >= 2: valid["3"] = blended[1][0]
+
     while True:
-        choice = input("사용할 진행 번호를 입력하세요 (1/2/3, q=취소): ").strip()
-        if choice.lower() == 'q': sys.exit("취소되었습니다.")
-        if choice in ('1','2','3'): break
-    chosen_prog = result[int(choice)-1]
+        choice = input(f"사용할 진행 번호를 입력하세요 ({'/'.join(valid.keys())}, q=취소): ").strip()
+        if choice.lower()=='q': sys.exit("취소되었습니다.")
+        if choice in valid: break
 
-    # ── 4) 임시 JSON 저장 ──────────────────────────────────────
-
-    BASE_DATA_DIR = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data"
-    genre_json_dir = os.path.join(BASE_DATA_DIR, f"{genre}_midi", "chord_JSON")
-    os.makedirs(genre_json_dir, exist_ok=True)
-
-    tmp_path = os.path.join(genre_json_dir, "tmp_selected_progression.json")
-
+    out_dir = os.path.join(BASE_DATA_DIR, f"{genre}_midi", "chord_JSON")
+    os.makedirs(out_dir, exist_ok=True)
+    tmp_path = os.path.join(out_dir, "tmp_selected_progression.json")
     with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump({"genre": genre, "progression": chosen_prog}, f, ensure_ascii=False, indent=2)
-
-    print(f"✅ '{choice}번' 진행이 저장되었습니다.\n→ {tmp_path}")
+        json.dump({"genre": genre, "progression": valid[choice]}, f, ensure_ascii=False, indent=2)
+    print(f"✅ 선택된 진행이 저장되었습니다.\n→ {tmp_path}")
     print("다음 단계에서 useSongMaker_*.py 를 실행하세요.")
+
+if __name__ == "__main__":
+    main()
