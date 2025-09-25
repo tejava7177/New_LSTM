@@ -5,7 +5,7 @@ from ..core.pipeline_predict import predict_top_k
 
 router = APIRouter()
 
-@router.post("/predict", response_model=PredictResponse)
+@router.post("/predict")
 def predict(req: PredictRequest):
-    results = predict_top_k(req.genre, req.seed, k=3)
-    return {"candidates": [Candidate(**r) for r in results]}
+    cands = predict_top_k(req.genre, req.seed, k=3)
+    return {"candidates": cands}
