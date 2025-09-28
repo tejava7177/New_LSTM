@@ -1,75 +1,80 @@
+// src/pages/PracticeMixPage.tsx
 import { useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import DeviceSelect from '../components/DeviceSelect'
 import { useMediaRecorder } from '../hooks/useMediaRecorder'
 import { audioBufferToWavBlob } from '../utils/wav'
 import { mixBuffersToAudioBuffer } from '../lib/mixdown'
 import { Midi } from '@tonejs/midi'
 import { renderMidiOnServer } from '../lib/midiServer'
+import { midiUrl, wavUrl } from '../lib/tracks'
 import { extractChordCuesFromMidi, getNowNextChord, ChordCue } from '../lib/midiCues'
-import { useNavigate } from 'react-router-dom'
 
 type TrackMeta = { name: string; channel?: number; instrument?: string; notes: number }
-
-type Props = {
-  jobId: string;        // 트랙 생성 완료 후 받은 jobId
-  progression: string[];// 카드에 표시된 진행
-  tempo: number;        // 카드 하단 입력칸(or 고정값)에서 사용한 BPM
-}
-
+type NavState = { jobId?: string; progression?: string[]; tempo?: number }
 
 export default function PracticeMixPage() {
-  /* ========== 입력 장치 & 녹음 ========== */
+  /* ===== 라우터 state (결과 카드 → 이동) ===== */
+  const { state } = useLocation()
+  const navState = (state as NavState) || {}
+  const navigate = useNavigate()
+
+  /* ===== 입력 장치 & 녹음 ===== */
   const [deviceId, setDeviceId] = useState<string>('')
   const { recording, blobUrl, start, stop, error: recErr } = useMediaRecorder(deviceId || undefined)
 
-  /* ========== MIDI 로딩 & 렌더링 상태 ========== */
+  /* ===== MIDI 로딩 & 렌더링 ===== */
   const [midiFile, setMidiFile] = useState<File | null>(null)
-  const [midiAudioUrl, setMidiAudioUrl] = useState<string | null>(null)  // 서버에서 받은 WAV
-  const [midiBuffer, setMidiBuffer] = useState<AudioBuffer | null>(null)  // 믹싱용
+  const [midiAudioUrl, setMidiAudioUrl] = useState<string | null>(null) // WAV
+  const [midiBuffer, setMidiBuffer] = useState<AudioBuffer | null>(null) // 믹싱용
   const [midiTracks, setMidiTracks] = useState<TrackMeta[]>([])
   const [rendering, setRendering] = useState(false)
 
-  // 메타(템포/박자) & 코드 큐
-  const [tempoBpm, setTempoBpm] = useState<number>(100)
+  const [tempoBpm, setTempoBpm] = useState<number>(navState.tempo ?? 100)
   const [timeSig, setTimeSig] = useState<[number, number]>([4, 4])
   const [chordCues, setChordCues] = useState<ChordCue[]>([])
 
-
-  /* ========== 플레이어/트랜스포트 ========== */
+  /* ===== 플레이어/트랜스포트 ===== */
   const midiEl = useRef<HTMLAudioElement>(null)
   const bassEl = useRef<HTMLAudioElement>(null)
   const [duration, setDuration] = useState(0)
   const [position, setPosition] = useState(0)
   const [playing, setPlaying] = useState(false)
   const rafRef = useRef<number | null>(null)
+  const transportStartAt = useRef<number | null>(null)
 
-  // 내부 트랜스포트(‘베이스만 녹음’ 같은 경우를 위해)
-  const transportStartAt = useRef<number | null>(null) // performance.now() 시작 시각(ms)
-
-  /* ========== 믹서 ========== */
+  /* ===== 믹서 ===== */
   const [midiVol, setMidiVol] = useState(0.9)
   const [bassVol, setBassVol] = useState(1.0)
   const [playMidi, setPlayMidi] = useState(true)
   const [playBass, setPlayBass] = useState(true)
   const [loop, setLoop] = useState(false)
 
-  /* ========== 합치기 결과 ========== */
+  /* ===== 합치기 ===== */
   const [mergedUrl, setMergedUrl] = useState<string | null>(null)
 
-  /* ========== 녹음 UX ========== */
+  /* ===== 녹음 UX ===== */
   const COUNTIN_BEATS = 4
   const [bassOnly, setBassOnly] = useState(false)
   const [nowChord, setNowChord] = useState('')
   const [nextChord, setNextChord] = useState('')
 
-  /* ========== 베이스 트리밍(카운트인 제거) ========== */
+  /* ===== 베이스 트리밍(카운트인 제거) ===== */
   const [bassTrimUrl, setBassTrimUrl] = useState<string | null>(null)
   const [bassBuffer, setBassBuffer] = useState<AudioBuffer | null>(null)
+
+  // ── 가드: 결과 카드(state) 없이 들어오면 홈으로
+  useEffect(() => {
+    if (!navState.jobId) {
+      navigate('/', { replace: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 카운트인(4박) 길이(초)
   const preRollSec = (60 / Math.max(40, Math.min(300, tempoBpm))) * COUNTIN_BEATS
 
-  // blobUrl이 생기면 카운트인 길이만큼 앞을 잘라 새 URL/버퍼 생성
+  // 녹음본을 프리롤만큼 잘라서 미리듣기/믹싱에 사용
   useEffect(() => {
     let revoke: string | null = null
     ;(async () => {
@@ -78,94 +83,105 @@ export default function PracticeMixPage() {
         const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
         const arr = await (await fetch(blobUrl)).arrayBuffer()
         const src = await ctx.decodeAudioData(arr.slice(0))
-
         const startSample = Math.floor(preRollSec * src.sampleRate)
-        const trimLen = Math.max(0, src.length - startSample)
-        const out = ctx.createBuffer(src.numberOfChannels, trimLen, src.sampleRate)
+        const out = ctx.createBuffer(src.numberOfChannels, Math.max(0, src.length - startSample), src.sampleRate)
         for (let ch = 0; ch < src.numberOfChannels; ch++) {
           out.getChannelData(ch).set(src.getChannelData(ch).subarray(startSample))
         }
         await ctx.close()
-
         const wav = audioBufferToWavBlob(out)
         const url = URL.createObjectURL(wav)
-        setBassTrimUrl(url)
-        setBassBuffer(out)
-        revoke = url
-      } catch (e) {
-        console.warn('trim failed:', e)
-        setBassTrimUrl(null)
-        setBassBuffer(null)
+        setBassTrimUrl(url); setBassBuffer(out); revoke = url
+      } catch {
+        setBassTrimUrl(null); setBassBuffer(null)
       }
     })()
     return () => { if (revoke) URL.revokeObjectURL(revoke) }
   }, [blobUrl, preRollSec])
 
-  /* ========== MIDI 선택 → 메타/큐 추출 + 서버 WAV 렌더 + 디코드 ========== */
+  /* ====== 생성 트랙에서 자동 부팅 ====== */
+  useEffect(() => {
+    async function bootstrapFromGeneratedJob(jobId: string, tempoFromNav?: number) {
+      let bpm = tempoFromNav ?? tempoBpm
+
+      // 1) MIDI(마커 포함) → 코드 큐
+      const midiArr = await (await fetch(midiUrl(jobId))).arrayBuffer()
+      try {
+        const pre = (60 / Math.max(40, Math.min(300, bpm))) * COUNTIN_BEATS
+        const cues = await extractChordCuesFromMidi(midiArr, { preRollSec: pre, windowBeats: 1 })
+        setChordCues(cues)
+        if (cues.length) { setNowChord(cues[0].text); setNextChord(cues[1]?.text ?? '') }
+      } catch {}
+
+      // 2) 템포/박자/트랙 메타
+      try {
+        const midi = new Midi(midiArr)
+        bpm = tempoFromNav ?? (midi.header.tempos?.[0]?.bpm ?? bpm)
+        setTempoBpm(bpm)
+        const ts = (midi.header.timeSignatures?.[0]?.timeSignature as number[]) || [4, 4]
+        setTimeSig([ts[0] ?? 4, ts[1] ?? 4])
+        setMidiTracks(midi.tracks.map(t => ({
+          name: t.name || '(no name)',
+          channel: t.channel,
+          instrument: t.instrument?.name || (t.instrument?.number != null ? `program ${t.instrument.number}` : undefined),
+          notes: t.notes.length,
+        })))
+      } catch {}
+
+      // 3) WAV 로드 + 디코드
+      const wurl = wavUrl(jobId)
+      setMidiAudioUrl(wurl)
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+      try {
+        const wArr = await (await fetch(wurl)).arrayBuffer()
+        setMidiBuffer(await ctx.decodeAudioData(wArr.slice(0)))
+      } finally { await ctx.close() }
+    }
+
+    if (navState.jobId) bootstrapFromGeneratedJob(navState.jobId, navState.tempo).catch(console.error)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navState.jobId])
+
+  /* ====== 수동 MIDI 업로드 플로우(직접 테스트용) ====== */
   async function handleMidiFile(file: File) {
-  setMidiFile(file)
-  setMidiAudioUrl(null)
-  setMidiBuffer(null)
-  setMergedUrl(null)
-  setMidiTracks([])
-  setChordCues([])
-  setNowChord(''); setNextChord('')
-
-  setRendering(true)
-  try {
-    // (A) 메타/트랙 파싱
-    const arr = await file.arrayBuffer()
-    const midi = new Midi(arr)
-
-    const bpm = midi.header.tempos?.[0]?.bpm ?? 100
-    setTempoBpm(bpm)
-
-    // 로컬에서 즉시 계산된 pre-roll (상태 의존 X)
-    const COUNTIN_BEATS = 4
-    const preRollSecLocal = (60 / Math.max(40, Math.min(300, bpm))) * COUNTIN_BEATS
-
-    const tsArr = (midi.header.timeSignatures?.[0]?.timeSignature as number[]) || [4, 4]
-    setTimeSig([tsArr[0] ?? 4, tsArr[1] ?? 4])
-
-    const tks: TrackMeta[] = midi.tracks.map(t => ({
-      name: t.name || '(no name)',
-      channel: t.channel,
-      instrument: t.instrument?.name || (t.instrument?.number != null ? `program ${t.instrument.number}` : undefined),
-      notes: t.notes.length,
-    }))
-    setMidiTracks(tks)
-
-    // (B) 코드 마커 큐 추출 (카운트인 만큼 오른쪽으로 이동)
-    const cues = await extractChordCuesFromMidi(arr, {
-      preRollSec: preRollSecLocal,
-      windowBeats: 1, // 필요 시 timeSig[0]로 바꿔 '1마디' 윈도우도 가능
-    })
-    setChordCues(cues)
-    // 첫 화면에서도 바로 보이도록 초기값 채움
-    if (cues.length) {
-      setNowChord(cues[0].text)
-      setNextChord(cues[1]?.text ?? '')
-    }
-
-    // (C) 서버 WAV URL
-    const { wavUrl } = await renderMidiOnServer(file)
-    setMidiAudioUrl(wavUrl)
-
-    // (D) 믹싱용 AudioBuffer
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+    setMidiFile(file)
+    setMidiAudioUrl(null); setMidiBuffer(null); setMergedUrl(null)
+    setMidiTracks([]); setChordCues([]); setNowChord(''); setNextChord('')
+    setRendering(true)
     try {
-      const wavArr = await (await fetch(wavUrl)).arrayBuffer()
-      const buf = await ctx.decodeAudioData(wavArr.slice(0))
-      setMidiBuffer(buf)
-    } finally {
-      await ctx.close()
-    }
-  } finally {
-    setRendering(false)
-  }
-}
+      const arr = await file.arrayBuffer()
+      const midi = new Midi(arr)
+      const bpm = midi.header.tempos?.[0]?.bpm ?? 100
+      setTempoBpm(bpm)
+      const ts = (midi.header.timeSignatures?.[0]?.timeSignature as number[]) || [4, 4]
+      setTimeSig([ts[0] ?? 4, ts[1] ?? 4])
+      setMidiTracks(midi.tracks.map(t => ({
+        name: t.name || '(no name)',
+        channel: t.channel,
+        instrument: t.instrument?.name || (t.instrument?.number != null ? `program ${t.instrument.number}` : undefined),
+        notes: t.notes.length,
+      })))
 
-  /* ========== 카운트인 ========== */
+      // 마커가 있으면 정확, 없으면 빈 배열(=힌트 미표시)
+      const preRollSecLocal = (60 / Math.max(40, Math.min(300, bpm))) * COUNTIN_BEATS
+      const cues = await extractChordCuesFromMidi(arr, { preRollSec: preRollSecLocal, windowBeats: 1 })
+      setChordCues(cues)
+
+      // 서버 렌더 WAV
+      const { wavUrl: wurl } = await renderMidiOnServer(file)
+      setMidiAudioUrl(wurl)
+
+      // 믹싱용 버퍼
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+      const wavArr = await (await fetch(wurl)).arrayBuffer()
+      setMidiBuffer(await ctx.decodeAudioData(wavArr.slice(0)))
+      await ctx.close()
+    } finally {
+      setRendering(false)
+    }
+  }
+
+  /* ===== 카운트인 ===== */
   async function playCountIn(beats: number, bpm: number) {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
     const beat = 60 / Math.max(40, Math.min(300, bpm))
@@ -190,21 +206,20 @@ export default function PracticeMixPage() {
     })
   }
 
-  /* ========== 오토플레이 해제 (사파리/크롬 보호) ========== */
+  /* ===== 오토플레이 해제 ===== */
   async function ensureUnlocked() {
     const el = midiEl.current; if (!el) return
     const prev = el.muted; el.muted = true
     try { await el.play().catch(()=>{}); el.pause() } finally { el.muted = prev }
   }
 
-  /* ========== 녹음 시작 (카운트인 → 동시 스타트) ========== */
+  /* ===== 녹음 시작 (카운트인 → 동시 스타트) ===== */
   async function startRecordingFlow() {
     if (!midiAudioUrl && !bassOnly) { alert('MIDI 파일을 먼저 선택하세요.'); return }
     if (!recording) await start()
     await ensureUnlocked()
     await playCountIn(COUNTIN_BEATS, tempoBpm)
 
-    // 내부 트랜스포트 시작(베이스만 녹음에도 위치가 진행)
     transportStartAt.current = performance.now()
     if (!bassOnly && midiEl.current) {
       midiEl.current.currentTime = 0
@@ -214,21 +229,19 @@ export default function PracticeMixPage() {
     if (!rafRef.current) tick()
   }
 
-  /* ========== 트랜스포트 / HUD 갱신 ========== */
+  /* ===== 트랜스포트/HUD ===== */
   function syncVolumesAndMutes() {
     if (midiEl.current) { midiEl.current.volume = midiVol; midiEl.current.muted = !playMidi; midiEl.current.loop = loop }
     if (bassEl.current) { bassEl.current.volume = bassVol; bassEl.current.muted = !playBass; bassEl.current.loop = loop }
   }
+  useEffect(() => { syncVolumesAndMutes() }, [midiVol, bassVol, playMidi, playBass, loop, midiAudioUrl, bassTrimUrl])
 
   function tick() {
-    // MIDI가 플레이 중이면 audio 시간을 우선 사용
     let t = midiEl.current ? (midiEl.current.currentTime ?? 0) : 0
-    // MIDI가 정지/없고 내부 클록이 켜져 있으면 그 시간을 사용
     if ((!midiEl.current || midiEl.current.paused) && transportStartAt.current) {
       t = (performance.now() - transportStartAt.current) / 1000
     }
     setPosition(t)
-
     if (chordCues.length > 0) {
       const { now, next } = getNowNextChord(chordCues, t)
       setNowChord(now); setNextChord(next)
@@ -242,14 +255,12 @@ export default function PracticeMixPage() {
     setPlaying(true)
     if (!rafRef.current) tick()
   }
-
   function pause() {
     midiEl.current?.pause()
     bassEl.current?.pause()
     setPlaying(false)
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
   }
-
   function stopAll() {
     pause()
     if (midiEl.current) midiEl.current.currentTime = 0
@@ -258,125 +269,88 @@ export default function PracticeMixPage() {
     setPosition(0)
     setNowChord(''); setNextChord('')
   }
-
   function seek(sec: number) {
     if (midiEl.current) midiEl.current.currentTime = sec
     if (bassEl.current) bassEl.current.currentTime = sec
-    // 내부 클록도 맞춰주기
     transportStartAt.current = performance.now() - sec * 1000
     setPosition(sec)
   }
 
-  // duration/ended 바인딩
-  // ▶︎ 네이티브 <audio> 컨트롤로 재생해도 코드/시간이 갱신되도록 이벤트 바인딩
-useEffect(() => {
-  const a = midiEl.current;
-  const b = bassEl.current;
-  if (!a && !b) return;
-
-  const onTU = () => {
-    const t = Math.max(a?.currentTime ?? 0, b?.currentTime ?? 0);
-    setPosition(t);
-    if (chordCues.length) {
-      const { now, next } = getNowNextChord(chordCues, t);
-      setNowChord(now);
-      setNextChord(next);
-    }
-  };
-
-  const onPlay = () => {
-    setPlaying(true);
-    // rAF 루프 시작
-    if (!rafRef.current) {
-      rafRef.current = requestAnimationFrame(function loop() {
-        onTU();
-        rafRef.current = requestAnimationFrame(loop);
-      });
-    }
-  };
-
-  const onPauseOrEnd = () => {
-    setPlaying(false);
-    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-    onTU(); // 마지막 위치 반영
-  };
-
-  // MIDI 오디오
-  a?.addEventListener('play', onPlay);
-  a?.addEventListener('pause', onPauseOrEnd);
-  a?.addEventListener('ended', onPauseOrEnd);
-  a?.addEventListener('timeupdate', onTU);
-  a?.addEventListener('seeking', onTU);
-  a?.addEventListener('seeked', onTU);
-
-  // Bass 오디오(있다면 동일 처리)
-  b?.addEventListener('play', onPlay);
-  b?.addEventListener('pause', onPauseOrEnd);
-  b?.addEventListener('ended', onPauseOrEnd);
-  b?.addEventListener('timeupdate', onTU);
-  b?.addEventListener('seeking', onTU);
-  b?.addEventListener('seeked', onTU);
-
-  // 초기 1회 갱신
-  onTU();
-
-  return () => {
-    a?.removeEventListener('play', onPlay);
-    a?.removeEventListener('pause', onPauseOrEnd);
-    a?.removeEventListener('ended', onPauseOrEnd);
-    a?.removeEventListener('timeupdate', onTU);
-    a?.removeEventListener('seeking', onTU);
-    a?.removeEventListener('seeked', onTU);
-
-    b?.removeEventListener('play', onPlay);
-    b?.removeEventListener('pause', onPauseOrEnd);
-    b?.removeEventListener('ended', onPauseOrEnd);
-    b?.removeEventListener('timeupdate', onTU);
-    b?.removeEventListener('seeking', onTU);
-    b?.removeEventListener('seeked', onTU);
-
-    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-  };
-}, [midiAudioUrl, bassTrimUrl, blobUrl, chordCues]);
-
+  // 메타데이터/종료 바인딩
   useEffect(() => {
-  return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
-}, []);
+    function updateDur() {
+      const d1 = midiEl.current?.duration ?? 0
+      const d2 = bassEl.current?.duration ?? 0
+      const d = Math.max(isFinite(d1) ? d1 : 0, isFinite(d2) ? d2 : 0)
+      if (d && isFinite(d)) setDuration(d)
+    }
+    const a = midiEl.current; const b = bassEl.current
+    a?.addEventListener('loadedmetadata', updateDur)
+    b?.addEventListener('loadedmetadata', updateDur)
+    a?.addEventListener('ended', () => !loop && pause())
+    b?.addEventListener('ended', () => !loop && pause())
+    updateDur()
+    return () => {
+      a?.removeEventListener('loadedmetadata', updateDur)
+      b?.removeEventListener('loadedmetadata', updateDur)
+    }
+  }, [midiAudioUrl, bassTrimUrl, loop])
 
-  // 전체 길이(duration) 갱신: 두 <audio> 중 더 긴 값을 사용
-useEffect(() => {
-  const a = midiEl.current;
-  const b = bassEl.current;
-  if (!a && !b) return;
+  // 네이티브 오디오 컨트롤로 재생/이동해도 코드 힌트 갱신
+  useEffect(() => {
+    const a = midiEl.current; const b = bassEl.current
+    if (!a && !b) return
+    const onTU = () => {
+      const t = Math.max(a?.currentTime ?? 0, b?.currentTime ?? 0)
+      setPosition(t)
+      if (chordCues.length) {
+        const { now, next } = getNowNextChord(chordCues, t)
+        setNowChord(now); setNextChord(next)
+      }
+    }
+    const onPlay = () => {
+      setPlaying(true)
+      if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(function loop() {
+          onTU(); rafRef.current = requestAnimationFrame(loop)
+        })
+      }
+    }
+    const onPauseOrEnd = () => {
+      setPlaying(false)
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
+      onTU()
+    }
+    ;[a,b].forEach(el => {
+      el?.addEventListener('play', onPlay)
+      el?.addEventListener('pause', onPauseOrEnd)
+      el?.addEventListener('ended', onPauseOrEnd)
+      el?.addEventListener('timeupdate', onTU)
+      el?.addEventListener('seeking', onTU)
+      el?.addEventListener('seeked', onTU)
+    })
+    onTU()
+    return () => {
+      ;[a,b].forEach(el => {
+        el?.removeEventListener('play', onPlay)
+        el?.removeEventListener('pause', onPauseOrEnd)
+        el?.removeEventListener('ended', onPauseOrEnd)
+        el?.removeEventListener('timeupdate', onTU)
+        el?.removeEventListener('seeking', onTU)
+        el?.removeEventListener('seeked', onTU)
+      })
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
+    }
+  }, [midiAudioUrl, bassTrimUrl, blobUrl, chordCues])
 
-  const updateDur = () => {
-    const d1 = a?.duration ?? 0;
-    const d2 = b?.duration ?? 0;
-    const d = Math.max(isFinite(d1) ? d1 : 0, isFinite(d2) ? d2 : 0);
-    if (d && isFinite(d)) setDuration(d);
-  };
+  useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }, [])
 
-  a?.addEventListener('loadedmetadata', updateDur);
-  b?.addEventListener('loadedmetadata', updateDur);
-  // 초기에 한 번 계산
-  updateDur();
-
-  return () => {
-    a?.removeEventListener('loadedmetadata', updateDur);
-    b?.removeEventListener('loadedmetadata', updateDur);
-  };
-}, [midiAudioUrl, bassTrimUrl]);
-
-
-
-
-  /* ========== 합치기(WAV) ========== */
+  /* ===== 합치기 ===== */
   async function mergeAndExport() {
     if (!midiBuffer) return
     if (mergedUrl) URL.revokeObjectURL(mergedUrl)
     setMergedUrl(null)
 
-    // 트리밍된 베이스 버퍼 우선 사용
     let bass: AudioBuffer | null = bassBuffer
     if (!bass && blobUrl) {
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
@@ -397,10 +371,9 @@ useEffect(() => {
     const url = URL.createObjectURL(wav)
     setMergedUrl(url)
   }
-
   useEffect(() => () => { if (mergedUrl) URL.revokeObjectURL(mergedUrl) }, [mergedUrl])
 
-  /* ========== 렌더 ========== */
+  /* ===== 렌더 ===== */
   return (
     <div className="pmx-wrap">
       {/* 입력 장치 */}
@@ -436,7 +409,7 @@ useEffect(() => {
                      onLoadedMetadata={syncVolumesAndMutes}
                      onPlay={syncVolumesAndMutes}
                      onError={(e)=>console.warn('MIDI audio error', e)} />
-            : <div className="thin">파일을 선택하세요</div>}
+            : <div className="thin">※ 이 페이지는 결과 카드의 “베이스 녹음하기”로 진입합니다.</div>}
         </div>
 
         {/* 메타/트랙/코드 정보 */}
@@ -454,12 +427,12 @@ useEffect(() => {
               ))}
             </ul>
             {chordCues.length > 0 && (
-  <div style={{marginTop:8, padding:'6px 8px', background:'#f7f7f9', border:'1px solid #eee', borderRadius:6}}>
-    <strong>코드(미디):</strong>{' '}
-    {nowChord ? <span>{nowChord}</span> : <span className="thin">대기 중…</span>}
-    {nextChord && <span className="thin">  →  다음: {nextChord}</span>}
-  </div>
-)}
+              <div style={{marginTop:8, padding:'6px 8px', background:'#f7f7f9', border:'1px solid #eee', borderRadius:6}}>
+                <strong>코드(미디):</strong>{' '}
+                {nowChord ? <span>{nowChord}</span> : <span className="thin">대기 중…</span>}
+                {nextChord && <span className="thin">  →  다음: {nextChord}</span>}
+              </div>
+            )}
           </details>
         )}
       </section>
@@ -477,7 +450,7 @@ useEffect(() => {
           </label>
         </div>
 
-        {/* 코드 힌트 */}
+        {/* 코드 힌트(녹음 섹션에도 표시) */}
         {chordCues.length > 0 && (
           <div style={{marginTop:8, padding:'6px 8px', background:'#f7f7f9', border:'1px solid #eee', borderRadius:6}}>
             <strong>코드 힌트:</strong>{' '}
@@ -487,7 +460,7 @@ useEffect(() => {
         )}
       </section>
 
-      {/* Bass 미리듣기 & 믹서 */}
+      {/* 베이스 미리듣기 & 믹서 */}
       <section className="pmx-panel">
         <h3>🎚 Bass 미리듣기 & 믹서</h3>
         <div className="mixer">
