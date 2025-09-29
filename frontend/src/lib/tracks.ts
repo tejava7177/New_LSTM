@@ -1,3 +1,4 @@
+// src/lib/tracks.ts
 export type GeneratePayload = {
   genre: string;
   progression: string[];
@@ -26,4 +27,4 @@ export async function getTrackStatus(jobId: string): Promise<StatusResponse> {
 
 export const midiUrl = (jobId: string) => `/api/tracks/${jobId}/midi`;
 export const xmlUrl  = (jobId: string) => `/api/tracks/${jobId}/musicxml`;
-export const wavUrl  = (jobId: string) => `/api/tracks/${jobId}/wav`;   // ★ 추가
+export const wavUrl  = (jobId: string) => `/api/tracks/${jobId}/wav`;

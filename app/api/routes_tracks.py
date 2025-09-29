@@ -67,25 +67,25 @@ def download_xml(job_id: str):
     return FileResponse(str(xml_path), media_type="application/xml", filename=f"{job_id}.xml")
 
 
-@router.get("/{job_id}/wav")
+# 기존 @router.get("/{job_id}/wav") 를 아래로 교체
+@router.api_route("/{job_id}/wav", methods=["GET", "HEAD", "POST"])
 def download_wav(job_id: str):
     info = _STATUS.get(job_id)
     if not info:
         raise HTTPException(404, "job not found")
 
     midi = Path(info["midi_path"])
-    if not midi.exists():
-        raise HTTPException(404, "midi not found")
+    wav  = Path(info.get("wav_path", midi.with_suffix(".wav")))
 
-    wav = Path(info.get("wav_path") or midi.with_suffix(".wav"))
+    # 파일이 없으면 여기서 렌더(아이들포스트/헤드 대비)
     if not wav.exists():
         try:
-            # 일부 구현은 str 경로를 기대하므로 안전하게 str로 전달
-            render_wav_with_fluidsynth(str(midi), str(wav), sample_rate=48000)
+            render_wav_with_fluidsynth(midi, wav, sample_rate=48000)
         except Exception as e:
             raise HTTPException(500, f"render failed: {e!s}")
 
     if not wav.exists():
         raise HTTPException(500, "wav not created")
 
-    return FileResponse(str(wav), media_type="audio/wav", filename=f"{job_id}.wav")
+    # Range/HEAD 대응은 FileResponse가 처리
+    return FileResponse(wav, media_type="audio/wav", filename=f"{job_id}.wav")
