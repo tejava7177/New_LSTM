@@ -1,74 +1,172 @@
 // src/pages/TunerBassPage.tsx
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import DeviceSelect from '../components/DeviceSelect'
 import { usePitch } from '../hooks/usePitch'
-import { Link } from 'react-router-dom'
 
-/** 베이스 표준 개방현 기준 주파수 */
-const BASE: Record<'E'|'A'|'D'|'G', number> = { E: 41.00, A: 54.80, D: 36.90, G: 48.90 }
-const STRINGS: Array<keyof typeof BASE> = ['E','A','D','G']
+type BassString = 'E'|'A'|'D'|'G'
 
-const log2 = (x: number) => Math.log(x) / Math.LN2
-const centsBetween = (f: number, ref: number) => 1200 * log2(f / ref)
-
-/** 주파수에 가장 가까운 ‘같은 음 이름’의 옥타브를 찾아줌 */
-function nearestOctaveHz(freq: number, base: number) {
-  if (freq <= 0) return base
-  // base * 2^k 가 freq에 가장 근접하도록 k를 정수로 고름
-  const k = Math.round(log2(freq / base))
-  return base * Math.pow(2, k)
+/** 관찰치 기반 목표(정수/소수 Hz) — 기존 로직 그대로 */
+const STRING_TARGET: Record<BassString, number> = {
+  E: 41.4,   // E1 ≈ 41Hz
+  A: 55.2,   // 관찰값(사용자 프로젝트 기준)
+  D: 36.7,   // 관찰값(사용자 프로젝트 기준)
+  G: 48.9,   // 관찰값(사용자 프로젝트 기준)
 }
 
-/** 최근 n개 표본의 표준편차 */
-function stdev(values: number[]) {
-  if (!values.length) return 999
-  const m = values.reduce((a,b)=>a+b,0) / values.length
-  const v = values.reduce((a,b)=> a + (b-m)*(b-m), 0) / values.length
-  return Math.sqrt(v)
-}
+// 게이팅/락/재암 파라미터 (기존 값 유지)
+const START_MAX_HZ = 150   // 이 값 아래로 들어오면 트래킹 시작 (고조파 무시)
+const TRACK_MAX_HZ = 120   // 트래킹 중 이 값 아래만 최소값 갱신
+const LOCK_TIME_MS = 1200  // 트래킹 최대 시간 → 초과 시 락
+const QUIET_GAP_MS = 200   // 무음으로 간주하는 간격
+const MIN_LOCK_HOLD_MS = 120 // 락 직후 최소 유지 시간(즉시 재암 방지)
+
+/** cents 계산 */
+const centsBetween = (f: number, ref: number) => 1200 * Math.log2(f / ref)
 
 export default function TunerBassPage() {
   const [deviceId, setDeviceId] = useState<string>('')
-  const [auto, setAuto] = useState(true)               // 자동 문자열 선택
-  const [sel, setSel] = useState<'E'|'A'|'D'|'G'>('E') // 수동 선택 시
-  const [calib, setCalib] = useState(440)              // 필요 시 캘리브레이션(옵션)
-  const [armed, setArmed] = useState(false)            // 마이크 권한 안내
+  const [armed, setArmed] = useState(false)     // 마이크 권한 여부
+  const [s, setS] = useState<BassString>('E')   // 수동 문자열 선택(예전 로직 유지)
+  const target = STRING_TARGET[s]
 
-  // 마이크에서 피치 추정 (기존 훅 그대로 사용)
+  // 저음 안정화는 기존처럼
   const pitch = usePitch(deviceId || undefined, { fftSize: 8192, minVolumeRms: 0.02 })
 
-  // 주파수가 있을 때 자동으로 가장 가까운 줄 선택
-  const activeString: 'E'|'A'|'D'|'G' = useMemo(() => {
-    if (!auto || !pitch) return sel
-    let best = 'E' as 'E'|'A'|'D'|'G'
-    let bestDiff = Infinity
-    for (const s of STRINGS) {
-      const ref = nearestOctaveHz(pitch, BASE[s])
-      const diff = Math.abs(pitch - ref)
-      if (diff < bestDiff) { bestDiff = diff; best = s }
-    }
-    return best
-  }, [auto, sel, pitch])
+  type Mode = 'idle' | 'tracking' | 'locked'
+  const [mode, setMode] = useState<Mode>('idle')
 
-  // 게이지용 계산
-  const refHz = pitch ? nearestOctaveHz(pitch, BASE[activeString]) : BASE[activeString]
-  const cents = pitch ? centsBetween(pitch, refHz) : 0
-  const centsClamped = Math.max(-100, Math.min(100, cents))
+  // 최소값/락 값
+  const minHzRef     = useRef<number | null>(null)
+  const validMinRef  = useRef(false)
+  const lockedHzRef  = useRef<number | null>(null)
 
-  // 잠김(=안정) 판정: 최근 12개의 표본을 보고 편차가 작고, 중심에서 ±5c 이내
-  const recentRef = useRef<number[]>([])
+  // 타이밍
+  const startMsRef     = useRef<number>(0)     // 트래킹 시작 시각
+  const lastPitchMsRef = useRef<number>(0)     // 마지막으로 pitch 검출된 시각
+  const lockedAtMsRef  = useRef<number>(0)     // 락 진입 시각
+
+  // 재암 상태: 락 중 고주파/무음 감지 후 true → 다시 <150Hz 들어오면 재시작
+  const rearmArmedRef  = useRef(false)
+
+  const resetAll = () => {
+    setMode('idle')
+    minHzRef.current = null
+    validMinRef.current = false
+    lockedHzRef.current = null
+    rearmArmedRef.current = false
+    startMsRef.current = 0
+  }
+
   useEffect(() => {
-    if (pitch) {
-      const arr = recentRef.current
-      arr.push(centsClamped)
-      if (arr.length > 12) arr.shift()
-    } else {
-      recentRef.current = []
-    }
-  }, [pitch, centsClamped])
+    const now = performance.now()
 
-  const locked = pitch != null && Math.abs(centsClamped) < 5 && stdev(recentRef.current) < 4
-  const status: 'flat'|'near'|'sharp' = centsClamped < -6 ? 'flat' : centsClamped > 6 ? 'sharp' : 'near'
+    if (pitch != null) {
+      lastPitchMsRef.current = now
+
+      // ── IDLE: 유효 밴드(<150Hz)로 내려오면 트래킹 시작
+      if (mode === 'idle') {
+        if (pitch < START_MAX_HZ) {
+          setMode('tracking')
+          startMsRef.current = now
+          minHzRef.current = pitch
+          validMinRef.current = pitch < TRACK_MAX_HZ
+          rearmArmedRef.current = false
+        }
+        return
+      }
+
+      // ── TRACKING: 저주파(<120Hz)에서만 최소값 갱신. 락 조건 충족 시 락.
+      if (mode === 'tracking') {
+        if (pitch < TRACK_MAX_HZ) {
+          if (minHzRef.current == null || pitch < minHzRef.current) {
+            minHzRef.current = pitch
+          }
+          validMinRef.current = true
+        }
+        const elapsed = now - startMsRef.current
+        if ((pitch > START_MAX_HZ && validMinRef.current) || elapsed >= LOCK_TIME_MS) {
+          lockedHzRef.current = validMinRef.current ? (minHzRef.current as number) : null
+          if (lockedHzRef.current) {
+            setMode('locked')
+            lockedAtMsRef.current = now
+            rearmArmedRef.current = false
+          } else {
+            setMode('idle') // 유효 최소가 없으면 리셋
+          }
+        }
+        return
+      }
+
+      // ── LOCKED: 재암(arm) → 재시작(restart)
+      if (mode === 'locked') {
+        const held = now - lockedAtMsRef.current
+
+        // 1) 락 직후 잠깐은 무시(바로 재암 방지)
+        if (held < MIN_LOCK_HOLD_MS) return
+
+        // 2) 고주파(>150Hz) 감지되면 재암
+        if (pitch > START_MAX_HZ) {
+          rearmArmedRef.current = true
+          return
+        }
+
+        // 3) 재암 상태에서 다시 <150Hz로 내려오면 새 트래킹 시작
+        if (rearmArmedRef.current && pitch < START_MAX_HZ) {
+          setMode('tracking')
+          startMsRef.current = now
+          minHzRef.current = pitch
+          validMinRef.current = pitch < TRACK_MAX_HZ
+          lockedHzRef.current = null
+          rearmArmedRef.current = false
+        }
+        return
+      }
+    } else {
+      // pitch == null (무음/미검출)
+      if (mode === 'tracking') {
+        // 트래킹 중 무음이면 유효 최소가 있으면 잠시 후 락, 없으면 리셋
+        const timer = setTimeout(() => {
+          if (performance.now() - lastPitchMsRef.current >= QUIET_GAP_MS) {
+            if (validMinRef.current) {
+              lockedHzRef.current = minHzRef.current
+              setMode(lockedHzRef.current ? 'locked' : 'idle')
+              if (lockedHzRef.current) {
+                lockedAtMsRef.current = performance.now()
+                rearmArmedRef.current = false
+              }
+            } else {
+              resetAll()
+            }
+          }
+        }, QUIET_GAP_MS)
+        return () => clearTimeout(timer)
+      }
+
+      if (mode === 'locked') {
+        // 락 중 무음이면 재암 ON → 다음에 <150Hz 들어오면 자동 재시작
+        const timer = setTimeout(() => {
+          if (performance.now() - lastPitchMsRef.current >= QUIET_GAP_MS) {
+            rearmArmedRef.current = true
+          }
+        }, QUIET_GAP_MS)
+        return () => clearTimeout(timer)
+      }
+    }
+  }, [pitch, mode])
+
+  // 표시 Hz: tracking은 현재까지의 min, locked는 고정값
+  const displayHz =
+    mode === 'locked'   ? lockedHzRef.current :
+    mode === 'tracking' ? minHzRef.current   :
+    null
+
+  // 센트/상태
+  const cents = displayHz != null ? centsBetween(displayHz, target) : 0
+  const visualCents = Math.max(-100, Math.min(100, cents))
+  const locked = mode === 'locked'
+  const status: 'flat'|'near'|'sharp' =
+    visualCents < -6 ? 'flat' : visualCents > 6 ? 'sharp' : 'near'
 
   return (
     <div className="tb-wrap">
@@ -79,40 +177,39 @@ export default function TunerBassPage() {
           <span className="tb-sub">E / A / D / G</span>
         </div>
         <div className="tb-actions">
-          <button className="tb-btn"
-                  onClick={async () => { await navigator.mediaDevices.getUserMedia({ audio:true }); setArmed(true) }}>
+          <button
+            className="tb-btn"
+            onClick={async () => {
+              await navigator.mediaDevices.getUserMedia({ audio: true })
+              setArmed(true)
+            }}
+          >
             마이크 권한
           </button>
-          <DeviceSelect value={deviceId} onChange={setDeviceId} />
-          <button className="tb-btn" onClick={()=>{ recentRef.current=[] }}>
-            재측정
-          </button>
+         <DeviceSelect
+          value={deviceId}
+          onChange={setDeviceId}
+          showPermissionButton={false}
+          showRefreshButton={false}
+          />
+          <button className="tb-btn" onClick={resetAll}>새로고침</button>
         </div>
       </header>
 
       {/* 본문 카드 */}
       <section className="tb-card">
-        {/* 왼쪽: 컨트롤 */}
+        {/* 왼쪽: 문자열 선택(수동) */}
         <aside className="tb-side">
-          <div className="tb-block">
-            <div className="tb-label">모드</div>
-            <div className="tb-chips">
-              <Chip active={auto} onClick={()=>setAuto(true)}>자동</Chip>
-              <Chip active={!auto} onClick={()=>setAuto(false)}>수동</Chip>
-            </div>
-          </div>
-
           <div className="tb-block">
             <div className="tb-label">문자열 선택</div>
             <div className="tb-chips">
-              {STRINGS.map(s => (
+              {(['E','A','D','G'] as BassString[]).map(k => (
                 <Chip
-                  key={s}
-                  active={activeString === s}
-                  disabled={auto}
-                  onClick={()=>!auto && setSel(s)}
+                  key={k}
+                  active={s === k}
+                  onClick={() => { setS(k); resetAll() }}
                 >
-                  {s} <span className="tb-chip-sub">({BASE[s].toFixed(1)} Hz)</span>
+                  {k} <span className="tb-chip-sub">({STRING_TARGET[k].toFixed(1)} Hz)</span>
                 </Chip>
               ))}
             </div>
@@ -125,12 +222,12 @@ export default function TunerBassPage() {
           </div>
         </aside>
 
-        {/* 오른쪽: 게이지 */}
+        {/* 오른쪽: 게이지/읽기/CTA */}
         <div className="tb-gauge">
           <Gauge
-            label={activeString}
-            pitch={pitch ?? 0}
-            cents={centsClamped}
+            label={s}
+            pitch={displayHz ?? 0}
+            cents={visualCents}
             status={status}
             locked={locked}
           />
@@ -140,16 +237,23 @@ export default function TunerBassPage() {
               <div className={`tb-status ${locked ? 'ok' : status}`}>
                 {locked ? 'locked' : status === 'near' ? 'near' : status}
               </div>
-              <div className="tb-note-name">{activeString}</div>
-              <div className="tb-freq">{pitch ? `${pitch.toFixed(1)} Hz` : '—'} <span className="tb-slim">/</span> {refHz.toFixed(1)} Hz</div>
-              <div className="tb-cent">{centsClamped >= 0 ? '+' : ''}{centsClamped.toFixed(0)} cents</div>
+              <div className="tb-note-name">{s}</div>
+              <div className="tb-freq">
+                {displayHz != null ? `${displayHz.toFixed(1)} Hz` : '—'}
+                <span className="tb-slim"> / </span>
+                {target.toFixed(1)} Hz
+              </div>
+              <div className="tb-cent">
+                {visualCents >= 0 ? '+' : ''}{visualCents.toFixed(0)} cents
+              </div>
             </div>
           </div>
 
           <div className="tb-help">
-            목표 {refHz.toFixed(1)} Hz 기준 · {locked ? '정음(±5c 이내)에서 바늘이 초록색' : '바늘이 중앙에 올 때까지 튜닝해 보세요.'}
+            목표 {target.toFixed(1)} Hz 기준 · {locked ? '정음(±5c 이내)에서 바늘이 초록색' : '바늘이 중앙에 올 때까지 튜닝해 보세요.'}
           </div>
-          {/* ▼ 추가: 다음 단계 CTA */}
+
+          {/* 다음 단계 CTA */}
           <div className="tb-cta">
             <Link to="/inputBassChord" className="tb-cta-btn" aria-label="코드 진행 생성으로 이동">
               <span className="tb-cta-emoji">🎼</span>
@@ -162,7 +266,7 @@ export default function TunerBassPage() {
   )
 }
 
-/* ---------- 소형 구성 요소들 ---------- */
+/* ---------- 소형 구성 요소들 (디자인 유지) ---------- */
 
 function Chip({
   children, active, onClick, disabled
@@ -178,17 +282,16 @@ function Chip({
   )
 }
 
-/** SVG 게이지 */
+/** SVG 게이지 — 최신 디자인 유지, 각도/색상은 위 로직(cents/status/locked)로 구동 */
 function Gauge({
   label, pitch, cents, status, locked
 }: { label: string; pitch: number; cents: number; status: 'flat'|'near'|'sharp'; locked: boolean }) {
-  // -50c .. +50c → -60deg .. +60deg
+  // -50c..+50c → -60deg..+60deg (시각 안정성을 위해 clamp)
   const angle = Math.max(-50, Math.min(50, cents)) * (60/50)
-  const stroke = locked ? '#10b981' : status==='near' ? '#f59e0b' : (status==='sharp' ? '#ef4444' : '#3b82f6')
+  const stroke = locked ? '#10b981' : (status==='near' ? '#f59e0b' : (status==='sharp' ? '#ef4444' : '#3b82f6'))
 
   return (
-    <svg className="tb-svg" viewBox="0 0 300 220" role="img" aria-label="tuning gauge">
-      {/* 외곽 반원 */}
+    <svg className="tb-svg" viewBox="0 0 300 220" role="img" aria-label={`tuning gauge for ${label}`}>
       <defs>
         <linearGradient id="ring" x1="0" x2="1" y1="0" y2="0">
           <stop offset="0%" stopColor="#c7d2fe"/>
@@ -197,10 +300,7 @@ function Gauge({
       </defs>
 
       {/* 반원 트랙 */}
-      <path
-        d="M40 170 A110 110 0 0 1 260 170"
-        fill="none" stroke="url(#ring)" strokeWidth="16" strokeLinecap="round"
-      />
+      <path d="M40 170 A110 110 0 0 1 260 170" fill="none" stroke="url(#ring)" strokeWidth="16" strokeLinecap="round" />
 
       {/* 눈금 */}
       {Array.from({length: 11}).map((_,i)=>{
