@@ -11,12 +11,12 @@ PROJ_ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 if PROJ_ROOT not in sys.path:
     sys.path.insert(0, PROJ_ROOT)
 
-# 새 로직에서 실제로 존재하는 것들만 임포트
 from LSTM.predict_next_chord import (
     load_model_and_vocab,
     mmr_select,
-    bucketize_three,
+    bucketize_three_dynamic as bucketize_three,  # ← 새 함수로 매핑
 )
+
 from LSTM.chord_engine.smart_progression import generate_topk
 from LSTM.harmony_score import evaluate_progression, interpret_score
 
@@ -46,69 +46,45 @@ def get_model_assets(genre: str):
         return _MODEL_CACHE[genre]
 
 def predict_top_k(genre: str, seed: List[str], k: int = 3):
-    """
-    프론트엔드가 기대하는 결과 포맷으로 Top-K 진행을 생성.
-    반환: [{ progression: [..], score: 0~1, label: str }, ...]
-    """
-    # 1) seed를 루트 3개로 축약
     seed_roots = _to_roots(seed)
 
-    # 2) 모델/사전
     model, c2i, i2c = get_model_assets(genre)
     use_model = model is not None
 
-    # 3) 룰 기반 상위 후보(안정적 정석용)
     rule_pool: List[Tuple[List[str], float]] = generate_topk(
         genre=genre, seed_roots=seed_roots, k=8, scorer=None, alpha=1.0
     )
     if not rule_pool:
-        # 예외적 상황: 후보가 하나도 없으면 seed만 돌려줌
-        return [{
-            "progression": seed_roots,
-            "score": 0.5,
-            "label": "기본 진행"
-        }]
+        return [{"progression": seed_roots, "score": 0.5, "label": "기본 진행"}]
 
     top1_seq, top1_sc = rule_pool[0]
 
-    # 4) 블렌딩 후보 + 다양성 선택(MMR)
     blended: List[Tuple[List[str], float]] = []
     if use_model:
         def scorer_fn(seq: List[str]) -> float:
             return float(evaluate_progression(model, seq, c2i, i2c))
-
-        # 후보풀 넓게 뽑고(64) 1등과 동일한 건 제외
         blended_pool = generate_topk(
             genre=genre, seed_roots=seed_roots, k=64, scorer=scorer_fn, alpha=0.5
         )
         blended_pool = [(s, sc) for (s, sc) in blended_pool if tuple(s) != tuple(top1_seq)]
-
-        # 다양성 우선( lam=0.55 ) + 최소 3포지션 이상 다른 후보
-        blended = mmr_select(
-            blended_pool, k=max(0, k - 1), lam=0.55, already=[top1_seq], min_diff=3
-        )
+        blended = mmr_select(blended_pool, k=max(0, k - 1), lam=0.55, already=[top1_seq], min_diff=3)
     else:
-        # 모델 없으면 룰풀의 나머지에서 다양성 선택
         rest = [(s, sc) for (s, sc) in rule_pool[1:]]
         blended = mmr_select(rest, k=max(0, k - 1), lam=0.55, already=[top1_seq], min_diff=3)
 
     combined = [(top1_seq, top1_sc)] + blended
     combined = combined[:k]
 
-    # 5) UI용 점수 보정(0~1로 반환: 프론트가 x100% 표시)
+    # ★ 동적 버킷팅 (입력에 따라 %가 달라짐)
     raw_scores = [sc for _, sc in combined]
-    # bucketize_three는 상위 3개 기준으로 보정하므로 부족하면 0으로 채움
-    shown_pct = bucketize_three(raw_scores + [0.0, 0.0, 0.0])  # List[int] (예: [88, 52, 18])
+    seqs_for_show = [seq for (seq, _) in combined]
+    top_seq = combined[0][0]
+    shown_pct = bucketize_three(seqs_for_show, raw_scores, top_seq=top_seq)  # e.g., [91, 57, 23]
 
     results = []
-    for i, (seq, sc) in enumerate(combined):
+    for i, (seq, _) in enumerate(combined):
         label = "정석 진행" if i == 0 else "대안 진행"
-        # 프론트는 0~1 점수를 기대하므로 백분율/100으로 전달
         score01 = float(shown_pct[i] if i < len(shown_pct) else 50) / 100.0
-        results.append({
-            "progression": seq,
-            "score": score01,
-            "label": label
-        })
+        results.append({"progression": seq, "score": score01, "label": label})
 
     return results

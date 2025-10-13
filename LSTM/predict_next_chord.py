@@ -3,6 +3,7 @@ import os, sys, json, re
 import numpy as np
 import torch
 from typing import List, Tuple, Optional
+import random
 
 # --- 안전 경로 보정 ---
 THIS_FILE = os.path.abspath(__file__)
@@ -124,16 +125,85 @@ def mmr_select(
     return selected
 
 # --- 점수 버킷(뷰용 캘리브레이션) ---
-def bucketize_three(scores01: List[float]) -> List[int]:
-    """내부 점수는 다양성/상대치. 표시용으로 1등/2등/3등을 원하는 구간에 맵핑."""
-    targets = [(0.86,0.92), (0.44,0.60), (0.12,0.30)]
+# 맨 위 import에 추가
+import random
+
+# 기존 bucketize_three() 교체
+
+def bucketize_three_dynamic(
+    seqs: List[List[str]],
+    scores01: List[float],
+    top_seq: List[str],
+) -> List[int]:
+    """
+    1) 각 결과는 미리 정한 버킷 범위에 표시되지만,
+    2) 버킷 내부 위치는 (상대 점수 · 다양성 · 시퀀스 해시 지터)로 달라진다.
+       - 같은 입력/같은 시퀀스면 항상 같은 퍼센트(해시 지터) → '하드코딩' 느낌 해소
+       - 다른 입력/다른 시퀀스면 자연스럽게 달라짐
+    """
+    BUCKETS = [(86, 92), (44, 60), (12, 30)]
+
+    def clamp(x, a, b): return max(a, min(b, x))
+    def similarity(a, b):
+        n = min(len(a), len(b))
+        if n == 0: return 0.0
+        same = sum(1 for i in range(n) if a[i]==b[i])
+        return same / n
+
     out = []
-    for i,s in enumerate(scores01[:3]):
-        lo,hi = targets[i]
-        # s가 0~1 어디든 중간값으로 안정적으로 매핑
-        mid = (lo+hi)/2.0
-        out.append(int(round(mid*100)))
+    top_score = scores01[0] if scores01 else 1e-6
+    for i, (seq, sc) in enumerate(zip(seqs[:3], scores01[:3])):
+        lo, hi = BUCKETS[i]
+        span = hi - lo
+
+        # 기본 가중치: (0~1)로 버킷 내 위치를 잡는다
+        if i == 0:
+            # 1번(정석): 룰스코어가 높을수록 버킷 상단에
+            base = clamp(sc, 0.0, 1.0)
+            w = 0.6 + 0.4 * base
+        else:
+            # 상대 점수 & 다양성(=1-유사도)을 절반씩 반영
+            ratio = clamp(sc / (top_score + 1e-9), 0.0, 1.0)
+            nov   = 1.0 - similarity(seq, top_seq)
+            w = clamp(0.5 * ratio + 0.5 * nov, 0.0, 1.0)
+
+        # 시퀀스 해시 기반 지터(재현 가능)
+        h = hash(tuple(seq)) & 0xffffffff
+        rng = random.Random(h)
+        jitter = rng.uniform(-0.10, 0.10)  # -0.10~+0.10 (버킷폭의 10%)
+
+        pct = lo + span * clamp(w + jitter, 0.0, 1.0)
+        out.append(int(round(pct)))
+
+    # 후보가 2개 이하일 때도 안전
+    while len(out) < 3:
+        lo, hi = BUCKETS[len(out)]
+        out.append(int((lo + hi) / 2))
     return out
+
+# ---- Backward compatibility (keeps API used by app/core/pipeline_predict.py) ----
+def bucketize_three(*args, **kwargs):
+    """
+    Wrapper for legacy callers.
+
+    - Old usage: bucketize_three(scores01)
+    - New usage: bucketize_three(seqs, scores01, top_seq)
+    """
+    # Old one-arg style -> return stable midpoints per bucket (as before)
+    if len(args) == 1 and isinstance(args[0], list) and not kwargs:
+        BUCKETS = [(86, 92), (44, 60), (12, 30)]
+        scores01 = args[0]
+        out = []
+        for i in range(min(3, len(scores01))):
+            lo, hi = BUCKETS[i]
+            out.append(int(round((lo + hi) / 2)))
+        while len(out) < 3:
+            lo, hi = BUCKETS[len(out)]
+            out.append(int(round((lo + hi) / 2)))
+        return out
+
+    # Otherwise, assume the new signature
+    return bucketize_three_dynamic(*args, **kwargs)
 
 def main():
     genres = list(BASE_DIRS.keys())
@@ -173,7 +243,9 @@ def main():
 
     # 3) 표시용 점수 보정(80–90 / 40–60 / 10–30)
     raw_scores = [top1_sc] + [sc for _,sc in blended]
-    shown = bucketize_three(raw_scores)
+    seqs_for_show = [top1_seq] + [s for (s, _) in blended]
+    raw_scores = [top1_sc] + [sc for (_, sc) in blended]
+    shown = bucketize_three_dynamic(seqs_for_show, raw_scores, top1_seq)
 
     print(f"\n🎸 [{genre.upper()}] Top-3 예측 코드 진행:")
     print(f"1번 진행(정석/룰 기반, 점수 {shown[0]}%): " + " → ".join(top1_seq))
