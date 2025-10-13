@@ -413,6 +413,23 @@ export default function PracticeMixPage() {
     return last.time + tail
   }, [cuesForUI, beatSec, timeSig, navState.barsPerChord])
 
+  // --- Single-cycle timeline with wrap-back playhead ---
+  const cycleSec = Math.max(0.001, totalFromCues);
+  // 현재 재생 위치를 1사이클로 모듈로
+  const posMod = ((position % cycleSec) + cycleSec) % cycleSec;
+
+  // 래핑(끝→처음) 순간엔 한 프레임만 transition 끄기
+  const prevPosRef = useRef(0);
+  const [noAnim, setNoAnim] = useState(false);
+  useEffect(() => {
+    const prev = prevPosRef.current;
+    if (posMod < prev - 0.05) {        // 충분히 뒤로 점프 = 래핑
+      setNoAnim(true);
+      requestAnimationFrame(() => setNoAnim(false));
+    }
+    prevPosRef.current = posMod;
+  }, [posMod]);
+
   /* ===== 렌더 ===== */
   return (
     <div className="pmx-wrap">
@@ -462,16 +479,22 @@ export default function PracticeMixPage() {
           <div className="timeline">
             {cuesForUI.map((c, i) => {
               const t0 = c.time
-              const t1 = cuesForUI[i+1]?.time ?? totalFromCues
+              const t1 = cuesForUI[i + 1]?.time ?? totalFromCues
               const w = Math.max(4, (t1 - t0) / Math.max(1, totalFromCues) * 100)
               const active = position >= t0 && position < t1
               return (
-                <div key={i} className={`cell ${active ? 'active' : ''}`} style={{ width: `${w}%` }}>
-                  <span>{c.text}</span>
-                </div>
+                  <div key={i} className={`cell ${active ? 'active' : ''}`} style={{width: `${w}%`}}>
+                    <span>{c.text}</span>
+                  </div>
               )
             })}
-            <div className="playhead" style={{ left: `${Math.min(100, position / Math.max(0.001, totalFromCues) * 100)}%` }} />
+            <div
+                className="playhead"
+                style={{
+                  left: `${Math.min(100, posMod / Math.max(0.001, totalFromCues) * 100)}%`,
+                  transition: noAnim ? 'none' : undefined
+                }}
+            />
           </div>
         </section>
       )}

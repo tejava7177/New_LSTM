@@ -16,8 +16,8 @@ export default function DeviceSelect({
   onChange,
   className,
   selectClassName,
-  showPermissionButton = true,
-  showRefreshButton = true,
+  showPermissionButton = false,
+  showRefreshButton = false,
 }: Props) {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
 
