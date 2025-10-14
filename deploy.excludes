@@ -1,0 +1,12 @@
+.git/
+__pycache__/
+*.pyc
+.DS_Store
+node_modules/
+recordings/
+renders/
+assets/model/*/X.npy
+assets/model/*/y.npy
+.venv/
+.env
+*.log

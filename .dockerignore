@@ -1,27 +1,15 @@
-cat > deploy.excludes << 'EOF'
-.git/
-__pycache__/
-*.pyc
-.DS_Store
-node_modules/
-assets/model/*/X.npy
-assets/model/*/y.npy
-recordings/
-.venv/
-.env
-*.log
-EOF
-
-cat > .dockerignore << 'EOF'
 .git
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .DS_Store
-node_modules/
-assets/model/*/X.npy
-assets/model/*/y.npy
+.venv/
+env/
+.vscode/
+.idea/
 recordings/
-.venv
-.env
-*.log
-EOF
+renders/
+assets/raw_datasets/
+node_modules/
+*.ipynb_checkpoints/
