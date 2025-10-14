@@ -4,6 +4,13 @@ import random
 import tempfile
 from typing import Optional, List, Dict
 
+# .env 지원(있으면 자동 로드)
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    pass
+
 from music21 import instrument
 
 # 패키지 상대 임포트 (SongMaker가 패키지여야 함: 하위 폴더에 __init__.py 필요)
@@ -27,11 +34,16 @@ def generate_jazz_track(
     point_density: str = "light",
     point_key: str = "C",
     out_dir: Optional[str] = None,
+    seed: Optional[int] = None,
 ) -> Dict[str, str]:
     """
     progression/옵션을 받아 Jazz 트랙을 생성하고 MIDI/MusicXML 경로를 반환한다.
     콘솔 입력 없이 동작한다.
     """
+    # 재현성을 위한 시드 고정 (옵션)
+    if seed is not None:
+        random.seed(seed)
+
     # 입력 검증
     chords = progression or []
     if not chords:
@@ -39,9 +51,10 @@ def generate_jazz_track(
     num_bars = len(chords)
     total_beats = 4.0 * num_bars
 
-    # 출력 디렉토리
+    # 출력 디렉토리 (.env의 CBB_RECORDINGS_DIR 우선)
+    env_outdir = os.getenv("CBB_RECORDINGS_DIR")
     if out_dir is None:
-        out_dir = tempfile.mkdtemp(prefix="jazz_output_")
+        out_dir = env_outdir or tempfile.mkdtemp(prefix="jazz_output_")
     os.makedirs(out_dir, exist_ok=True)
 
     # 스타일 결정
@@ -52,7 +65,7 @@ def generate_jazz_track(
 
     # ---- 드럼 ----
     d_m, d_b, d_d, d_l = generate_jazz_drum_pattern(
-        measures=num_bars, style=drum_style, density="medium", fill_prob=0.12, seed=None
+        measures=num_bars, style=drum_style, density="medium", fill_prob=0.12, seed=seed
     )
     d_m, d_b, d_d, d_l = fix_beats(d_m, d_b, d_d, d_l, total_beats=total_beats)  # grid=0.5 기본
     d_m, d_b, d_d, d_l = clip_and_fill_rests(d_m, d_b, d_d, d_l)                 # dur_max=2.0 기본

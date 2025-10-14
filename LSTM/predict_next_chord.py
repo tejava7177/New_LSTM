@@ -12,16 +12,24 @@ PROJ_ROOT = os.path.dirname(LSTM_DIR)
 if PROJ_ROOT not in sys.path:
     sys.path.insert(0, PROJ_ROOT)
 
+# --- .env 로드(있으면) ---
+try:
+    from dotenv import load_dotenv  # optional dependency
+    load_dotenv()
+except Exception:
+    # python-dotenv 미설치/누락 시도 무시
+    pass
+
 from LSTM.model.train_lstm import ChordLSTM
 from LSTM.harmony_score import evaluate_progression
 from LSTM.chord_engine.smart_progression import generate_topk
 
 BASE_DIRS = {
-    "jazz": "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/jazz/New2",
-    "rock": "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/rock",
-    "pop" : "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/pop",
+    "jazz": os.environ.get("CBB_MODEL_JAZZ", "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/jazz/New2"),
+    "rock": os.environ.get("CBB_MODEL_ROCK", "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/rock"),
+    "pop" : os.environ.get("CBB_MODEL_POP",  "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/pop"),
 }
-BASE_DATA_DIR = "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data"
+BASE_DATA_DIR = os.environ.get("CBB_DATA_DIR", "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data")
 
 ROOT_RE = re.compile(r"^([A-G](?:#|b)?)")
 
@@ -125,8 +133,6 @@ def mmr_select(
     return selected
 
 # --- 점수 버킷(뷰용 캘리브레이션) ---
-# 맨 위 import에 추가
-import random
 
 # 기존 bucketize_three() 교체
 
