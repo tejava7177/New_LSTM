@@ -1,4 +1,4 @@
-# app/api/routes_render.py
+# app/api/routes_render.py (발췌)
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -15,14 +15,19 @@ def which(cmd: str) -> Optional[str]:
     return shutil.which(cmd)
 
 def find_sf2() -> Optional[Path]:
-    # 우선순위: 환경변수 → 로컬 자산 → 일반 설치 경로
-    cand = [
+    """
+    우선순위: 환경변수(CBB_SOUNDFONT_PATH → SF2_PATH) → 프로젝트 자산 → 시스템 기본 경로
+    """
+    env_candidates = [
+        os.environ.get("CBB_SOUNDFONT_PATH"),
         os.environ.get("SF2_PATH"),
+    ]
+    file_candidates = [
         BASE_DIR / "app" / "assets" / "sf2" / "GeneralUserGS.sf2",
         Path("/opt/homebrew/share/soundfonts/FluidR3_GM.sf2"),
         Path("/usr/share/sounds/sf2/FluidR3_GM.sf2"),
     ]
-    for c in cand:
+    for c in [*env_candidates, *file_candidates]:
         if not c:
             continue
         p = Path(c)
@@ -32,20 +37,18 @@ def find_sf2() -> Optional[Path]:
 
 @router.post("/midi-to-wav")
 async def midi_to_wav(midi: UploadFile = File(...)):
-    # 브라우저에 따라 content_type이 다양해서 엄격 차단은 하지 않음
-    # if midi.content_type not in (...): pass
-
     if not which("fluidsynth"):
         raise HTTPException(
             501,
-            "fluidsynth CLI가 없습니다. 'brew install fluid-synth' 후 다시 시도하세요."
+            "fluidsynth CLI를 찾지 못했습니다. (컨테이너라면 apt-get으로 fluidsynth 설치 필요)"
         )
 
     sf2 = find_sf2()
     if not sf2:
         raise HTTPException(
             500,
-            "SF2 사운드폰트를 찾을 수 없습니다. SF2_PATH 환경변수 설정 또는 app/assets/sf2/ 경로에 배치하세요."
+            "SF2 사운드폰트를 찾지 못했습니다. CBB_SOUNDFONT_PATH(또는 SF2_PATH) 환경변수 설정 "
+            "혹은 app/assets/sf2/GeneralUserGS.sf2 배치가 필요합니다."
         )
 
     with tempfile.TemporaryDirectory() as td:
@@ -61,19 +64,28 @@ async def midi_to_wav(midi: UploadFile = File(...)):
             str(sf2),
             str(tmp_mid),
         ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            raise HTTPException(504, "fluidsynth 렌더 타임아웃(120s)")
+
         if proc.returncode != 0 or not tmp_wav.exists():
-            raise HTTPException(500, "fluidsynth 렌더 실패: " + (proc.stderr or proc.stdout))
+            detail = (proc.stderr or proc.stdout or "").strip()
+            raise HTTPException(500, f"fluidsynth 렌더 실패: {detail[:4000]}")
 
         out_id = f"{uuid.uuid4().hex}.wav"
         out_path = RENDER_DIR / out_id
         shutil.move(str(tmp_wav), out_path)
 
     duration = 0.0
-    with wave.open(str(out_path), "rb") as wf:
-        frames = wf.getnframes()
-        fr = wf.getframerate()
-        duration = frames / float(fr)
+    try:
+        with wave.open(str(out_path), "rb") as wf:
+            frames = wf.getnframes()
+            fr = wf.getframerate()
+            duration = frames / float(fr)
+    except Exception:
+        # duration 계산 실패는致命아님
+        duration = 0.0
 
     return {"id": out_id, "url": f"/api/render/{out_id}", "duration": duration}
 
@@ -82,4 +94,5 @@ def get_render(file_id: str):
     path = RENDER_DIR / file_id
     if not path.exists():
         raise HTTPException(404, "not found")
-    return FileResponse(path)
+    # wav만 반환하고 싶다면 media_type="audio/wav" 지정 가능
+    return FileResponse(path)  # , media_type="audio/wav"

@@ -25,9 +25,9 @@ from LSTM.harmony_score import evaluate_progression
 from LSTM.chord_engine.smart_progression import generate_topk
 
 BASE_DIRS = {
-    "jazz": os.environ.get("CBB_MODEL_JAZZ", "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/jazz/New2"),
-    "rock": os.environ.get("CBB_MODEL_ROCK", "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/rock"),
-    "pop" : os.environ.get("CBB_MODEL_POP",  "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/model/LSTM/model/pop"),
+    "jazz": os.environ.get("CBB_MODEL_JAZZ", "/app/assets/model/jazz/New2"),
+    "rock": os.environ.get("CBB_MODEL_ROCK", "/app/assets/model/rock"),
+    "pop" : os.environ.get("CBB_MODEL_POP", "/app/assets/model/pop"),
 }
 BASE_DATA_DIR = os.environ.get("CBB_DATA_DIR", "/Users/simjuheun/Desktop/myProject/New_LSTM/LSTM/cli/data")
 

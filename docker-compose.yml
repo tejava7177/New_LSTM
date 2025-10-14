@@ -1,0 +1,33 @@
+version: "3.8"
+
+services:
+  cbb-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Apple Silicon에서 AMD64로 빌드하려면 아래 주석 해제
+      # platform: linux/amd64
+    env_file:
+      - .env.docker
+    environment:
+      # 덮어쓰기/보강 가능
+      - CBB_SOUNDFONT_PATH=/app/assets/sf2/GeneralUserGS.sf2
+    ports:
+      - "8000:8000"
+    volumes:
+      # 산출물(미디/악보) 외부로 뽑기
+      - ./recordings:/recordings
+      # 필요하다면 tmp JSON도 호스트로 유지
+      - ./LSTM/cli/data:/app/LSTM/cli/data
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      # HTTPS 붙일 계획이면 나중에 "443:443"도 열 예정
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      - cbb-api
+    restart: unless-stopped
