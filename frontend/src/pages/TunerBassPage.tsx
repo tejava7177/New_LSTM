@@ -6,12 +6,12 @@ import { usePitch } from '../hooks/usePitch'
 
 type BassString = 'E'|'A'|'D'|'G'
 
-/** 관찰치 기반 목표(정수/소수 Hz) — 기존 로직 그대로 */
+/** 관찰치 기반 목표(정수/소수 Hz) */
 const STRING_TARGET: Record<BassString, number> = {
-  E: 41.4,   // E1 ≈ 41Hz
-  A: 55.2,   // 관찰값(사용자 프로젝트 기준)
-  D: 36.7,   // 관찰값(사용자 프로젝트 기준)
-  G: 48.9,   // 관찰값(사용자 프로젝트 기준)
+  E: 41.4,
+  A: 55.2,
+  D: 36.7,
+  G: 48.9,
 }
 
 // 게이팅/락/재암 파라미터 (기존 값 유지)
@@ -30,7 +30,7 @@ export default function TunerBassPage() {
   const [s, setS] = useState<BassString>('E')   // 수동 문자열 선택(예전 로직 유지)
   const target = STRING_TARGET[s]
 
-  // 저음 안정화는 기존처럼
+
   const pitch = usePitch(deviceId || undefined, { fftSize: 8192, minVolumeRms: 0.02 })
 
   type Mode = 'idle' | 'tracking' | 'locked'

@@ -29,8 +29,8 @@ def generate_jazz_track(
     progression: List[str],
     tempo: int = 140,
     drum: str = "auto",         # ["medium_swing","up_swing","two_feel","shuffle_blues","brush_ballad"]
-    comp: str = "auto",         # 현재 minimal 고정(확장 가능)
-    point_inst: str = "none",   # "none" | "auto" | "trumpet, flute" (쉼표 구분)
+    comp: str = "auto",
+    point_inst: str = "none",
     point_density: str = "light",
     point_key: str = "C",
     out_dir: Optional[str] = None,

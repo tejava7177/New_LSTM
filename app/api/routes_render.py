@@ -84,7 +84,7 @@ async def midi_to_wav(midi: UploadFile = File(...)):
             fr = wf.getframerate()
             duration = frames / float(fr)
     except Exception:
-        # duration 계산 실패는致命아님
+        # duration 계산
         duration = 0.0
 
     return {"id": out_id, "url": f"/api/render/{out_id}", "duration": duration}
