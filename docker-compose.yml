@@ -20,6 +20,14 @@ services:
       # 필요하다면 tmp JSON도 호스트로 유지
       - ./LSTM/cli/data:/app/LSTM/cli/data
     restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ap-northeast-2
+        awslogs-group: /cbb/new-lstm/api
+        awslogs-stream: cbb-api
+        awslogs-create-group: "true"     # 드라이버가 그룹을 생성 시도(미지원 환경이면 2단계에서 미리 생성)
+
 
   nginx:
     image: nginx:alpine
@@ -31,3 +39,10 @@ services:
     depends_on:
       - cbb-api
     restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ap-northeast-2
+        awslogs-group: /cbb/new-lstm/nginx
+        awslogs-stream: nginx
+        awslogs-create-group: "true"
