@@ -1,4 +1,4 @@
-# C.B.B – Chord Based Band 🎸
+# C.B.B – Create Bass BackingTrack 🎸
 실시간 튜너(FFT) · 코드 진행 생성(LSTM) · 자동 반주(MIDI/악보/WAV) · 웹 서비스
 
 **배포:** https://cbbunivproject.store  · **API 문서:** https://cbbunivproject.store/docs
