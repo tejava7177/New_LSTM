@@ -38,6 +38,21 @@ C.B.B(Create Bass BackingTrack)는 기타/베이스 연주자를 위한 **올인
 
 ---
 
+## 기술 스택
+<p align="center">
+  <img src="https://skillicons.dev/icons?i=react,ts,vite,python,fastapi,pytorch,numpy,pandas,docker,nginx,aws,ubuntu,git,github&perline=7" />
+</p>
+
+**Frontend**: Vite(React/TS) – 빠른 HMR, 생산성 높은 빌드 체인  
+**Backend**: FastAPI – 타입 기반 설계, 자동 문서화, 비동기 성능  
+**ML**: PyTorch – LSTM 구현·추론 용이, CPU 배포 친화  
+**Music**: `music21`, `pretty_midi` – MIDI/악보 처리 표준 라이브러리  
+**Audio**: FluidSynth + **GeneralUserGS.sf2** – 경량·재현 가능한 렌더  
+**Infra**: Docker + Nginx + EC2 – 프리티어/저비용, **이미지 동결로 재현성 확보**  
+**Monitoring**: CloudWatch Logs – 중앙 로그/알람
+
+---
+
 ## 주요 기능
 1) **튜너(FFT)**  
    - WebAudio + `getUserMedia`(HTTPS 필요) → **실시간 FFT** 기반 기본 주파수 추정  
@@ -66,21 +81,6 @@ C.B.B(Create Bass BackingTrack)는 기타/베이스 연주자를 위한 **올인
 
 ---
 
-
-## 기술 스택
-<p align="center">
-  <img src="https://skillicons.dev/icons?i=react,ts,vite,python,fastapi,pytorch,numpy,pandas,docker,nginx,aws,ubuntu,git,github&perline=7" />
-</p>
-
-**Frontend**: Vite(React/TS) – 빠른 HMR, 생산성 높은 빌드 체인  
-**Backend**: FastAPI – 타입 기반 설계, 자동 문서화, 비동기 성능  
-**ML**: PyTorch – LSTM 구현·추론 용이, CPU 배포 친화  
-**Music**: `music21`, `pretty_midi` – MIDI/악보 처리 표준 라이브러리  
-**Audio**: FluidSynth + **GeneralUserGS.sf2** – 경량·재현 가능한 렌더  
-**Infra**: Docker + Nginx + EC2 – 프리티어/저비용, **이미지 동결로 재현성 확보**  
-**Monitoring**: CloudWatch Logs – 중앙 로그/알람
-
----
 
 ## 빠른 시작(로컬)
 ```bash
