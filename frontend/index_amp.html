@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>C.B.B – Amp Demo (Gain / Tone / Master)</title>
+  <style>
+    :root { --bg:#0f172a; --panel:#111827; --line:#1f2937; --text:#e5e7eb; --muted:#94a3b8; --accent:#60a5fa; }
+    * { box-sizing:border-box; font-family:-apple-system,BlinkMacSystemFont,"Pretendard",Inter,Segoe UI,Roboto,Apple SD Gothic Neo,Noto Sans KR,"Malgun Gothic",sans-serif; }
+    body { margin:0; background:#0b1220; color:#dbeafe; }
+    .wrap { max-width:960px; margin:0 auto; padding:24px; }
+    h1 { margin:0 0 14px; font-size:20px; letter-spacing:.2px; }
+    .card { background:linear-gradient(#0f172a,#0b1220); border:1px solid #182235; border-radius:14px; padding:14px; box-shadow:0 1px 0 rgba(0,0,0,.25); }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+    .btn { padding:8px 12px; border-radius:10px; border:1px solid #1e293b; background:#0b1628; color:#e5e7eb; cursor:pointer; }
+    .btn.primary { background:#12233d; border-color:#1d3a66; }
+    .btn:disabled { opacity:.6; cursor:not-allowed; }
+    select, label.chk { padding:8px 12px; border-radius:10px; border:1px solid #1e293b; background:#0b1628; color:#e5e7eb; }
+    .panel { background:linear-gradient(#111827,#0b1220); border:1px solid #1f2937; border-radius:14px; padding:14px; }
+    .head { font-weight:700; margin-bottom:8px; color:#f3f4f6; }
+    .grid { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-end; }
+    .scope { background:#0b1220; border:1px dashed #1f2937; border-radius:12px; padding:8px 10px; }
+    canvas { display:block; width:100%; height:140px; }
+    .status { color:#93c5fd; font-size:13px; margin-left:auto; }
+
+    /* === knob === */
+    .knb { display:inline-flex; flex-direction:column; align-items:center; gap:6px; width:96px }
+    .knb-dial {
+      width:68px; height:68px; border-radius:50%;
+      background: radial-gradient(140% 140% at 30% 30%, #111827, #0b1220);
+      border:1px solid #1f2937; position:relative; transition:transform .05s linear;
+      box-shadow: inset 0 2px 6px rgba(0,0,0,.35), 0 1px 0 rgba(255,255,255,.04);
+      cursor:grab;
+    }
+    .knb-dial.grab { cursor:grabbing; }
+    .knb-indicator {
+      position:absolute; left:50%; top:6px; width:2px; height:24px; background:#e5e7eb;
+      transform:translateX(-50%); border-radius:2px; box-shadow:0 0 0 1px rgba(0,0,0,.25);
+    }
+    .knb-label .t { font-size:12px; color:#a3b1c7; text-transform:uppercase; letter-spacing:.06em; }
+    .knb-label .v { font-size:12px; color:#e5e7eb; opacity:.9; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>⚡️ C.B.B Amp Demo <small style="color:#9fb7df;font-weight:400">– Gain / Tone / Master</small></h1>
+
+  <div class="card" style="margin-bottom:14px;">
+    <div class="row">
+      <button id="btnPerm" class="btn">마이크 권한</button>
+      <select id="deviceSel"></select>
+      <label class="chk" style="display:inline-flex;align-items:center;gap:6px">
+        <input id="testTone" type="checkbox"> 테스트톤(110Hz)
+      </label>
+      <button id="btnStart" class="btn primary">시작</button>
+      <button id="btnStop" class="btn">정지</button>
+      <span id="status" class="status">대기 중…</span>
+    </div>
+
+    <div class="panel">
+      <div class="head">AMP</div>
+      <div class="grid">
+        <div class="knb" data-min="0" data-max="10" data-step="0.1" data-key="gain" data-val="4">
+          <div class="knb-dial"><div class="knb-indicator"></div></div>
+          <div class="knb-label"><div class="t">Gain</div><div class="v">4.0</div></div>
+        </div>
+        <div class="knb" data-min="-5" data-max="5" data-step="0.1" data-key="tone" data-val="0">
+          <div class="knb-dial"><div class="knb-indicator"></div></div>
+          <div class="knb-label"><div class="t">Tone</div><div class="v">0.0</div></div>
+        </div>
+        <div class="knb" data-min="0" data-max="10" data-step="0.1" data-key="master" data-val="7.5">
+          <div class="knb-dial"><div class="knb-indicator"></div></div>
+          <div class="knb-label"><div class="t">Master</div><div class="v">7.5</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="scope" style="margin-top:12px;">
+      <canvas id="scope"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="font-size:13px;color:#9fb7df">
+      브라우저 정책상 파일을 더블클릭(<code>file://</code>)로 열면 마이크 접근이 제한될 수 있어요.
+      아래처럼 로컬 서버로 띄워주세요:
+      <code>python3 -m http.server 63342</code> → <code>http://localhost:63342/index_amp.html</code>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const sel = document.getElementById('deviceSel');
+  const btnPerm = document.getElementById('btnPerm');
+  const btnStart = document.getElementById('btnStart');
+  const btnStop = document.getElementById('btnStop');
+  const statusEl = document.getElementById('status');
+  const testTone = document.getElementById('testTone');
+  const scope = document.getElementById('scope');
+
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  let stream = null, ctx = null, source = null, analyser = null, rafId = 0;
+  let amp = null, osc = null, oscGain = null;
+
+  /* ---------- Amp core (preGain -> waveshaper -> tiltEQ -> master) ---------- */
+  function makeDriveCurve(drive, samples = 2048) {
+    const k = drive, c = new Float32Array(samples);
+    for (let i = 0; i < samples; i++) {
+      const x = (i/(samples-1))*2 - 1;
+      c[i] = Math.tanh(k * x);
+    }
+    return c;
+  }
+  function createAmp(context) {
+    const input = context.createGain();
+    const pre = context.createGain();
+    const shaper = context.createWaveShaper();
+    const low = context.createBiquadFilter(); low.type='lowshelf'; low.frequency.value = 250;
+    const high= context.createBiquadFilter(); high.type='highshelf'; high.frequency.value=2500;
+    const master = context.createGain();
+    input.connect(pre); pre.connect(shaper).connect(low).connect(high).connect(master);
+
+    // defaults
+    pre.gain.value = 1.0;
+    shaper.curve = makeDriveCurve(3);
+    master.gain.value = .8;
+
+    const api = {
+      input, output: master,
+      setGain(v) { const g=Math.max(0,Math.min(10,v)); pre.gain.value=0.2+g*0.25; shaper.curve=makeDriveCurve(2+g*1.8); },
+      setTone(v) { const t=Math.max(-5,Math.min(5,v))/5; low.gain.value=(t<0?6*(-t):-3*t); high.gain.value=(t>0?9*t:4*t); },
+      setMaster(v){ const g=Math.max(0,Math.min(10,v)); master.gain.value=Math.pow(g/10,1.2); },
+      disconnect(){ try{ input.disconnect(); pre.disconnect(); shaper.disconnect(); low.disconnect(); high.disconnect(); master.disconnect(); }catch{} }
+    };
+    return api;
+  }
+
+  /* ---------- UI helpers ---------- */
+  async function askPermission() {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    s.getTracks().forEach(t=>t.stop());
+    await refreshDevices();
+    statusEl.textContent = '권한 OK';
+  }
+  async function refreshDevices() {
+    const list = await navigator.mediaDevices.enumerateDevices();
+    sel.innerHTML = '';
+    list.filter(d=>d.kind==='audioinput').forEach(d=>{
+      const o=document.createElement('option'); o.value=d.deviceId; o.textContent=d.label||d.deviceId;
+      sel.appendChild(o);
+    });
+  }
+
+  function resizeCanvas() {
+    const rect = scope.getBoundingClientRect();
+    scope.width = Math.floor(rect.width * dpr);
+    scope.height = Math.floor(140 * dpr);
+  }
+  new ResizeObserver(resizeCanvas).observe(scope);
+
+  /* ---------- start / stop ---------- */
+  async function start() {
+    stop();
+    statusEl.textContent='시작 준비…';
+
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state==='suspended') await ctx.resume();
+
+    amp = createAmp(ctx);
+
+    if (testTone.checked) {
+      osc = ctx.createOscillator(); osc.type='sine'; osc.frequency.value = 110;
+      oscGain = ctx.createGain(); oscGain.gain.value = 0.5;
+      osc.connect(oscGain).connect(amp.input);
+      source = osc;
+      osc.start();
+    } else {
+      const constraints = sel.value ? { audio:{deviceId:{exact:sel.value}} } : { audio:true };
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      source = ctx.createMediaStreamSource(stream);
+      source.connect(amp.input);
+    }
+
+    // analyser (for scope)
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.1;
+    amp.output.connect(analyser).connect(ctx.destination);
+
+    // apply initial knob values
+    applyKnobs();
+
+    // scope loop
+    const loop = () => { drawScope(); rafId = requestAnimationFrame(loop); };
+    loop();
+
+    statusEl.textContent='실행 중';
+  }
+
+  function stop() {
+    cancelAnimationFrame(rafId); rafId=0;
+    if (source) { try{ source.disconnect(); }catch{} source=null; }
+    if (amp) { amp.disconnect(); amp=null; }
+    if (analyser){ try{ analyser.disconnect(); }catch{} analyser=null; }
+    if (osc){ try{ osc.stop(); osc.disconnect(); }catch{} osc=null; }
+    if (oscGain){ try{ oscGain.disconnect(); }catch{} oscGain=null; }
+    if (stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+    if (ctx){ try{ ctx.close(); }catch{} ctx=null; }
+    statusEl.textContent='정지';
+    clearScope();
+  }
+
+  /* ---------- scope drawing ---------- */
+  function clearScope(){
+    const g = scope.getContext('2d'), W=scope.width, H=scope.height;
+    g.clearRect(0,0,W,H); g.fillStyle='#0b1220'; g.fillRect(0,0,W,H);
+    g.strokeStyle='#1f2937'; g.lineWidth=1*dpr; g.beginPath();
+    g.moveTo(0, H/2+0.5*dpr); g.lineTo(W, H/2+0.5*dpr); g.stroke();
+  }
+  function drawScope(){
+    const g = scope.getContext('2d'), W=scope.width, H=scope.height, mid=Math.floor(H/2);
+    g.clearRect(0,0,W,H); g.fillStyle='#0b1220'; g.fillRect(0,0,W,H);
+    g.strokeStyle='#1f2937'; g.lineWidth=1*dpr; g.beginPath(); g.moveTo(0,mid+0.5*dpr); g.lineTo(W,mid+0.5*dpr); g.stroke();
+    if (!analyser) return;
+    const n = analyser.fftSize; const buf = new Float32Array(n); analyser.getFloatTimeDomainData(buf);
+    const grad = g.createLinearGradient(0,0,0,H); grad.addColorStop(0,'#60a5fa'); grad.addColorStop(1,'#a78bfa');
+    g.strokeStyle=grad; g.lineWidth=2*dpr; g.beginPath();
+    for (let i=0;i<n;i++){ const t=i/(n-1); const x=(t*(W-2*dpr))+1*dpr; const y=mid+(buf[i]*(H*0.45)); if(i===0) g.moveTo(x,y); else g.lineTo(x,y); }
+    g.stroke();
+  }
+
+  /* ---------- knobs ---------- */
+  function applyKnobs(){
+    if (!amp) return;
+    const vals = getKnobValues();
+    amp.setGain(vals.gain);
+    amp.setTone(vals.tone);
+    amp.setMaster(vals.master);
+  }
+  function getKnobValues(){
+    const o={}; document.querySelectorAll('.knb').forEach(el=>{
+      o[el.dataset.key] = parseFloat(el.dataset.val);
+    }); return o;
+  }
+  function initKnobs(){
+    document.querySelectorAll('.knb').forEach(el=>{
+      const dial = el.querySelector('.knb-dial'), valEl = el.querySelector('.knb-label .v');
+      const min = parseFloat(el.dataset.min), max=parseFloat(el.dataset.max), step=parseFloat(el.dataset.step||'0.1');
+      const setAngle = ()=>{
+        const v=parseFloat(el.dataset.val); valEl.textContent=v.toFixed(1);
+        const angle = 270 * ((v - min) / (max - min)) - 135;
+        dial.style.transform = `rotate(${angle}deg)`;
+      };
+      setAngle();
+      dial.addEventListener('mousedown', (e)=>{
+        dial.classList.add('grab');
+        const startY=e.clientY, start = parseFloat(el.dataset.val);
+        function move(ev){
+          const dy = startY - ev.clientY;
+          const delta = (max-min) * (dy/150);
+          let v = Math.round((start + delta)/step)*step;
+          v = Math.max(min, Math.min(max, v));
+          el.dataset.val = String(v);
+          setAngle(); applyKnobs();
+        }
+        function up(){ dial.classList.remove('grab'); window.removeEventListener('mousemove',move); window.removeEventListener('mouseup',up); }
+        window.addEventListener('mousemove',move); window.addEventListener('mouseup',up);
+      });
+      // 더블클릭: 기본값 복구
+      dial.addEventListener('dblclick', ()=>{
+        const def = parseFloat(el.getAttribute('data-val'));
+        el.dataset.val = String(def); setAngle(); applyKnobs();
+      });
+    });
+  }
+
+  /* ---------- events & init ---------- */
+  btnPerm.addEventListener('click', ()=> askPermission().catch(e=>alert(e.message)));
+  btnStart.addEventListener('click', ()=> start().catch(e=>{ console.error(e); alert(e.message); statusEl.textContent='오류'; }));
+  btnStop.addEventListener('click', stop);
+  testTone.addEventListener('change', ()=>{ if (ctx) { start().catch(e=>alert(e.message)); } });
+
+  refreshDevices().catch(()=>{});
+  resizeCanvas(); clearScope(); initKnobs();
+})();
+</script>
+</body>
+</html>
