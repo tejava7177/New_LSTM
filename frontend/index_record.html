@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live Waveform Demo (0.5s bars)</title>
+  <style>
+    :root { --card:#fafbff; --line:#e5e7eb; --text:#0f172a; --muted:#64748b; }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Pretendard", Inter, Segoe UI, Roboto, Apple SD Gothic Neo, Noto Sans KR, "Malgun Gothic", sans-serif; }
+    body { margin: 0; padding: 24px; background: #f8fafc; color: var(--text); }
+    .wrap { max-width: 840px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 16px; }
+    .card { background: white; border: 1px solid #eef2f7; border-radius: 14px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 0 rgba(16,24,40,.03); }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .btn { padding: 8px 12px; border-radius: 10px; border: 1px solid #e5e7eb; background: #fff; cursor: pointer; }
+    .btn.primary { background: #eef2ff; border-color: #e0e7ff; }
+    .btn.danger  { background: #fee2e2; border-color: #fecaca; }
+    .hint { color: var(--muted); font-size: 13px; }
+    .wave { background: var(--card); border: 1px dashed var(--line); border-radius: 12px; padding: 8px 12px; }
+    canvas { display: block; width: 100%; height: 140px; }
+    .legend { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; color: var(--muted); font-size: 12px; }
+    select { padding: 8px 10px; border-radius: 10px; border: 1px solid #e5e7eb; background: #fff; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎙 실시간 파형 데모 (0.5초 간격)</h1>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:10px;">
+      <button id="btnPerm" class="btn">마이크 권한</button>
+      <select id="deviceSel"></select>
+      <button id="btnStart" class="btn primary">시작</button>
+      <button id="btnStop" class="btn">정지</button>
+      <button id="btnReset" class="btn">리셋</button>
+      <select id="modeSel" title="표시 방식" class="btn">
+        <option value="wave">파형(실시간)</option>
+        <option value="bars">막대(0.5s)</option>
+        <option value="scroll">파형-스크롤(녹음)</option>
+      </select>
+      <span class="hint" id="status">대기 중…</span>
+    </div>
+
+    <div class="wave">
+      <canvas id="wave"></canvas>
+      <div class="legend">
+        <span>최근 피크 진폭 히스토리(오른쪽 정렬)</span>
+        <span class="hint">간격 0.5s · 막대 최대 160개</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="hint">
+      팁: 브라우저 오디오 정책 때문에 파일을 더블클릭(<code>file://</code>)로 열면 마이크 접근이
+      제한될 수 있어요. 아래의 “로컬 서버 실행” 방법으로 <code>http://localhost</code>에서 열어주세요.
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const sel   = document.getElementById('deviceSel');
+  const btnP  = document.getElementById('btnPerm');
+  const btnS  = document.getElementById('btnStart');
+  const btnT  = document.getElementById('btnStop');
+  const btnR  = document.getElementById('btnReset');
+  const wave  = document.getElementById('wave');
+  const stat  = document.getElementById('status');
+  const modeSel = document.getElementById('modeSel');
+
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const intervalMs = 500;
+  const maxBars = 160;
+  const scrollPx = 2;           // 매 프레임 왼쪽으로 밀릴 픽셀(px) – dpr로 보정
+  let bars = [];           // { amp: 0..1 }
+  let timer = null;
+  let rafId = 0;
+  let stream = null;
+  let ctx = null, source = null, analyser = null;
+
+  function resizeCanvas() {
+    const rect = wave.getBoundingClientRect();
+    wave.width = Math.floor(rect.width * dpr);
+    wave.height = Math.floor(140 * dpr);
+    drawCurrent();
+  }
+  new ResizeObserver(resizeCanvas).observe(wave);
+
+  async function askPermission() {
+    // 기본 장치로 먼저 권한 요청 → labels 노출
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    s.getTracks().forEach(t => t.stop());
+    await refreshDevices();
+    stat.textContent = '권한 OK';
+  }
+
+  async function refreshDevices() {
+    const list = await navigator.mediaDevices.enumerateDevices();
+    const inputs = list.filter(d => d.kind === 'audioinput');
+    sel.innerHTML = '';
+    for (const d of inputs) {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.textContent = d.label || d.deviceId || '마이크';
+      sel.appendChild(opt);
+    }
+  }
+
+  async function start() {
+    stop(); // clean first
+    stat.textContent = '시작 준비…';
+
+    const constraints = { audio: sel.value ? { deviceId: { exact: sel.value } } : true };
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended') await ctx.resume();
+
+    source = ctx.createMediaStreamSource(stream);
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = (modeSel.value === 'wave' || modeSel.value === 'scroll') ? 0.1 : 0.6;
+    source.connect(analyser);
+
+    if (modeSel.value === 'wave') {
+      const loop = () => { drawWave(); rafId = requestAnimationFrame(loop); };
+      loop();
+    } else if (modeSel.value === 'scroll') {
+      const loop = () => { drawScrollWave(); rafId = requestAnimationFrame(loop); };
+      loop();
+    } else {
+      const tick = () => { sample(); drawBars(); };
+      tick();
+      timer = setInterval(tick, intervalMs);
+    }
+    stat.textContent = '실행 중';
+  }
+
+  function stop() {
+    if (timer) { clearInterval(timer); timer = null; }
+    if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+    try { source && source.disconnect(); } catch {}
+    analyser = null; source = null;
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    if (ctx) { ctx.close(); ctx = null; }
+    stat.textContent = '정지';
+  }
+
+  function reset() {
+    bars = [];
+    drawCurrent();
+  }
+
+  function drawCurrent() {
+    if (modeSel.value === 'wave') {
+      drawWave();
+    } else if (modeSel.value === 'scroll') {
+      const W = wave.width, H = wave.height, mid = Math.floor(H/2);
+      const g = wave.getContext('2d');
+      g.clearRect(0, 0, W, H);
+      g.fillStyle = '#f8fafc';
+      g.fillRect(0, 0, W, H);
+      g.strokeStyle = '#e5e7eb';
+      g.lineWidth = 1 * dpr;
+      g.beginPath();
+      g.moveTo(0, mid + 0.5 * dpr);
+      g.lineTo(W, mid + 0.5 * dpr);
+      g.stroke();
+    } else {
+      drawBars();
+    }
+  }
+
+  function sample() {
+    if (!analyser) return;
+    const len = analyser.fftSize;
+    const buf = new Float32Array(len);
+    analyser.getFloatTimeDomainData(buf);
+    let peak = 0;
+    for (let i = 0; i < len; i++) {
+      const v = Math.abs(buf[i]);
+      if (v > peak) peak = v;
+    }
+    const amp = Math.max(0, Math.min(1, peak));
+    bars.push({ amp });
+    if (bars.length > maxBars) bars.splice(0, bars.length - maxBars);
+  }
+
+  function drawBars() {
+    const W = wave.width, H = wave.height, mid = Math.floor(H/2);
+    const g = wave.getContext('2d');
+    g.clearRect(0,0,W,H);
+    g.fillStyle = '#f8fafc'; g.fillRect(0,0,W,H);
+    g.strokeStyle = '#e5e7eb'; g.lineWidth = 1*dpr;
+    g.beginPath(); g.moveTo(0, mid + 0.5*dpr); g.lineTo(W, mid + 0.5*dpr); g.stroke();
+
+    if (!bars.length) return;
+    const gap = 2*dpr;
+    const barW = Math.max(2*dpr, Math.floor((W - gap*(bars.length-1)) / bars.length));
+    let x = W - (barW*bars.length + gap*(bars.length-1)); // 오른쪽 정렬
+
+    for (let i = 0; i < bars.length; i++) {
+      const amp = bars[i].amp;
+      const h = Math.max(2*dpr, Math.floor(amp * (H*0.9)));
+      const top = Math.max(0, mid - Math.floor(h/2));
+      const grad = g.createLinearGradient(0, top, 0, top+h);
+      grad.addColorStop(0, '#93c5fd'); // blue-300
+      grad.addColorStop(1, '#a78bfa'); // violet-400
+      g.fillStyle = grad;
+      g.fillRect(x, top, barW, h);
+      x += barW + gap;
+    }
+  }
+
+  function drawScrollWave() {
+    const W = wave.width, H = wave.height, mid = Math.floor(H / 2);
+    const g = wave.getContext('2d');
+    const dprScroll = Math.max(1, window.devicePixelRatio || 1);
+    const s = Math.max(1, Math.floor(scrollPx * dprScroll)); // 프레임당 스크롤 폭
+
+    // 1) 이전 프레임을 왼쪽으로 s px 밀기
+    g.drawImage(wave, s, 0, W - s, H, 0, 0, W - s, H);
+
+    // 2) 오른쪽 s px 영역 초기화 + 중앙 라인
+    g.fillStyle = '#f8fafc';
+    g.fillRect(W - s, 0, s, H);
+    g.strokeStyle = '#e5e7eb';
+    g.lineWidth = 1 * dpr;
+    g.beginPath();
+    g.moveTo(W - s, mid + 0.5 * dpr);
+    g.lineTo(W,     mid + 0.5 * dpr);
+    g.stroke();
+
+    if (!analyser) return;
+
+    // 3) 최신 오디오 표본을 가져와 오른쪽에 세로 스트립으로 그리기
+    const n = analyser.fftSize;
+    const buf = new Float32Array(n);
+    analyser.getFloatTimeDomainData(buf);
+
+    // 그라데이션(위에서 아래)
+    const grad = g.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#60a5fa');
+    grad.addColorStop(1, '#a78bfa');
+    g.strokeStyle = grad;
+    g.lineWidth = 1 * dpr; // 세로 라인 두께
+
+    // s개의 세로 칼럼으로 분할해서 각 칼럼의 min/max를 그립니다.
+    for (let c = 0; c < s; c++) {
+      const start = Math.floor((c / s) * n);
+      const end   = Math.floor(((c + 1) / s) * n);
+      let min =  1, max = -1;
+      for (let i = start; i < end; i++) {
+        const v = buf[i];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      const x = (W - s) + c + 0.5; // 오른쪽 영역의 x 위치
+      const y1 = mid + (min * (H * 0.45));
+      const y2 = mid + (max * (H * 0.45));
+      g.beginPath();
+      g.moveTo(x, y1);
+      g.lineTo(x, y2);
+      g.stroke();
+    }
+
+    // 4) 헤드(재생/녹음 바) 시각적 표시: 오른쪽 모서리 라인
+    g.strokeStyle = 'rgba(37, 99, 235, 0.35)'; // indigo-600 @ 35%
+    g.lineWidth = 2 * dpr;
+    g.beginPath();
+    g.moveTo(W - s + 0.5 * dpr, 0);
+    g.lineTo(W - s + 0.5 * dpr, H);
+    g.stroke();
+  }
+
+  function drawWave() {
+    const W = wave.width, H = wave.height, mid = Math.floor(H/2);
+    const g = wave.getContext('2d');
+
+    // background + mid line
+    g.clearRect(0, 0, W, H);
+    g.fillStyle = '#f8fafc';
+    g.fillRect(0, 0, W, H);
+    g.strokeStyle = '#e5e7eb';
+    g.lineWidth = 1 * dpr;
+    g.beginPath();
+    g.moveTo(0, mid + 0.5 * dpr);
+    g.lineTo(W, mid + 0.5 * dpr);
+    g.stroke();
+
+    if (!analyser) return;
+
+    const n = analyser.fftSize;
+    const buf = new Float32Array(n);
+    analyser.getFloatTimeDomainData(buf);
+
+    const grad = g.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#60a5fa'); // blue-400
+    grad.addColorStop(1, '#a78bfa'); // violet-400
+    g.strokeStyle = grad;
+    g.lineWidth = 2 * dpr;
+    g.beginPath();
+
+    // draw sharp line (oscilloscope-like)
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1);
+      const x = (t * (W - 2 * dpr)) + 1 * dpr;
+      const y = mid + (buf[i] * (H * 0.45));
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+
+  modeSel.addEventListener('change', () => {
+    // if running, restart loop to switch mode seamlessly
+    const running = (!!timer) || (!!rafId);
+    if (analyser) analyser.smoothingTimeConstant = (modeSel.value === 'wave' || modeSel.value === 'scroll') ? 0.1 : 0.6;
+    if (running) {
+      start().catch(e => { stat.textContent = '오류'; console.error(e); alert(e.message); });
+    } else {
+      drawCurrent();
+    }
+  });
+
+  // UI events
+  btnP.addEventListener('click', () => askPermission().catch(e => alert(e.message)));
+  btnS.addEventListener('click', () => start().catch(e => { stat.textContent = '오류'; console.error(e); alert(e.message); }));
+  btnT.addEventListener('click', stop);
+  btnR.addEventListener('click', reset);
+
+  // 초기화
+  refreshDevices().catch(()=>{ /* 권한 전에는 label이 비어있을 수 있음 */ });
+  resizeCanvas();
+  drawCurrent();
+})();
+</script>
+</body>
+</html>
