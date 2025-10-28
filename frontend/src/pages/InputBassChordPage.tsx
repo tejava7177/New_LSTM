@@ -359,27 +359,27 @@ export default function InputBassChordPage(){
       <DeviceSelect value={deviceId} onChange={setDeviceId} />
 
       {/* 메이저 표기 */}
-      <div className="seg">
-        <span className="seg-label">메이저 표기</span>
-        <div className="seg">
-          <label className={`chip ${!majAsText ? 'active' : ''}`}>
-            <input
-              type="radio"
-              checked={!majAsText}
-              onChange={() => setMajAsText(false)}
-            />
-            C
-          </label>
-          <label className={`chip ${majAsText ? 'active' : ''}`}>
-            <input
-              type="radio"
-              checked={majAsText}
-              onChange={() => setMajAsText(true)}
-            />
-            Cmaj
-          </label>
-        </div>
-      </div>
+      {/*<div className="seg">*/}
+      {/*  <span className="seg-label">메이저 표기</span>*/}
+      {/*  <div className="seg">*/}
+      {/*    <label className={`chip ${!majAsText ? 'active' : ''}`}>*/}
+      {/*      <input*/}
+      {/*        type="radio"*/}
+      {/*        checked={!majAsText}*/}
+      {/*        onChange={() => setMajAsText(false)}*/}
+      {/*      />*/}
+      {/*      C*/}
+      {/*    </label>*/}
+      {/*    <label className={`chip ${majAsText ? 'active' : ''}`}>*/}
+      {/*      <input*/}
+      {/*        type="radio"*/}
+      {/*        checked={majAsText}*/}
+      {/*        onChange={() => setMajAsText(true)}*/}
+      {/*      />*/}
+      {/*      Cmaj*/}
+      {/*    </label>*/}
+      {/*  </div>*/}
+      {/*</div>*/}
 
       {/* 표기 방식 */}
       <div className="seg">
