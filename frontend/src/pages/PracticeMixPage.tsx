@@ -63,8 +63,44 @@ export default function PracticeMixPage() {
   const [playBass, setPlayBass] = useState(true)
   const [loop, setLoop] = useState(false)
 
+  /* AMP (모니터링용 이펙트 체인: preGain -> waveshaper -> tiltEQ -> master) */
+  const [ampRunning, setAmpRunning] = useState(false)
+  const [ampGain, setAmpGain] = useState(4.0)     // 0..10
+  const [ampTone, setAmpTone] = useState(0.0)     // -5..+5 (tilt EQ)
+  const [ampMaster, setAmpMaster] = useState(7.5) // 0..10
+  const [ampTestTone, setAmpTestTone] = useState(false)
+  const [ampStatus, setAmpStatus] = useState('대기 중…')
+  // === AMP 녹음 반영 옵션 ===
+  const [applyAmpToRec, setApplyAmpToRec] = useState(false)
+  const [ampRecording, setAmpRecording] = useState(false)
+  const [procBlobUrl, setProcBlobUrl] = useState<string | null>(null)
+
+  const ampCtxRef = useRef<AudioContext | null>(null)
+  const ampInputRef = useRef<GainNode | null>(null)
+  const ampPreRef = useRef<GainNode | null>(null)
+  const ampShaperRef = useRef<WaveShaperNode | null>(null)
+  const ampLowRef = useRef<BiquadFilterNode | null>(null)
+  const ampHighRef = useRef<BiquadFilterNode | null>(null)
+  const ampMasterRef = useRef<GainNode | null>(null)
+  const ampAnalyserRef = useRef<AnalyserNode | null>(null)
+  const ampStreamRef = useRef<MediaStream | null>(null)
+  const ampOscRef = useRef<OscillatorNode | null>(null)
+  const ampOscGainRef = useRef<GainNode | null>(null)
+  const ampRafRef = useRef<number | null>(null)
+  const ampCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  // AMP 출력 → MediaStreamDestination(녹음용) & MediaRecorder
+  const ampMsDestRef = useRef<MediaStreamAudioDestinationNode | null>(null)
+  const ampRecorderRef = useRef<MediaRecorder | null>(null)
+  const ampChunksRef = useRef<Blob[]>([])
+
+  // 🔼 추가: AMP 입력 소스 및 스코프 버퍼
+  const ampInputSrcRef = useRef<AudioNode | null>(null)
+  const ampDrawBufRef = useRef<Float32Array | null>(null)
+
   /* 합치기 */
   const [mergedUrl, setMergedUrl] = useState<string | null>(null)
+  // hook(blobUrl) vs AMP-processed(procBlobUrl) 중 실제 사용될 녹음본 URL
+  const activeBlobUrl = applyAmpToRec ? procBlobUrl : blobUrl
 
   /* UX */
   const COUNTIN_BEATS = navState.preRollBeats ?? 4
@@ -81,10 +117,10 @@ export default function PracticeMixPage() {
   useEffect(() => {
     let revoke: string | null = null
     ;(async () => {
-      if (!blobUrl) { setBassTrimUrl(null); setBassBuffer(null); return }
+      if (!activeBlobUrl) { setBassTrimUrl(null); setBassBuffer(null); return }
       try {
         const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
-        const arr = await (await fetch(blobUrl)).arrayBuffer()
+        const arr = await (await fetch(activeBlobUrl)).arrayBuffer()
         const src = await ctx.decodeAudioData(arr.slice(0))
         const startSample = Math.floor(preRollSec * src.sampleRate)
         const out = ctx.createBuffer(src.numberOfChannels, Math.max(0, src.length - startSample), src.sampleRate)
@@ -100,7 +136,7 @@ export default function PracticeMixPage() {
       }
     })()
     return () => { if (revoke) URL.revokeObjectURL(revoke) }
-  }, [blobUrl, preRollSec])
+  }, [activeBlobUrl, preRollSec])
 
   /* ===== 유틸: progression으로 큐 계산(fallback) ===== */
   function buildCuesFromProgression(prog: string[], barsPerChord = 1): ChordCue[] {
@@ -224,6 +260,182 @@ export default function PracticeMixPage() {
     })
   }
 
+  /* ===== AMP helpers ===== */
+  function makeDriveCurve(drive: number, samples = 2048) {
+    const k = drive; const c = new Float32Array(samples)
+    for (let i = 0; i < samples; i++) {
+      const x = (i / (samples - 1)) * 2 - 1
+      c[i] = Math.tanh(k * x)
+    }
+    return c
+  }
+  function applyAmpParams() {
+    if (!ampPreRef.current || !ampShaperRef.current || !ampLowRef.current || !ampHighRef.current || !ampMasterRef.current) return
+    const g = Math.max(0, Math.min(10, ampGain))
+    ampPreRef.current.gain.value = 0.2 + g * 0.25
+    ampShaperRef.current.curve = makeDriveCurve(2 + g * 1.8)
+
+    const t = Math.max(-5, Math.min(5, ampTone)) / 5
+    ampLowRef.current.gain.value  = (t < 0 ? 6 * (-t) : -3 * t)
+    ampHighRef.current.gain.value = (t > 0 ? 9 *  t  :  4 * t)
+
+    const m = Math.max(0, Math.min(10, ampMaster))
+    ampMasterRef.current.gain.value = Math.pow(m / 10, 1.2)
+  }
+  function clearAmpScope() {
+    const cv = ampCanvasRef.current; if (!cv) return
+    const g = cv.getContext('2d'); if (!g) return
+    const dpr = Math.max(1, (window.devicePixelRatio || 1))
+    const W = cv.clientWidth * dpr, H = 140 * dpr
+    cv.width = Math.max(1, Math.floor(W)); cv.height = Math.max(1, Math.floor(H))
+    g.clearRect(0,0,cv.width,cv.height)
+    g.fillStyle = '#0b1220'; g.fillRect(0,0,cv.width,cv.height)
+    g.strokeStyle = '#1f2937'; g.lineWidth = 1 * dpr
+    g.beginPath(); g.moveTo(0, Math.floor(cv.height/2)+0.5*dpr); g.lineTo(cv.width, Math.floor(cv.height/2)+0.5*dpr); g.stroke()
+  }
+  function drawAmpScope() {
+    const cv = ampCanvasRef.current; const an = ampAnalyserRef.current
+    if (!cv || !an) return
+    const g = cv.getContext('2d'); if (!g) return
+    const dpr = Math.max(1, (window.devicePixelRatio || 1))
+    const W = cv.clientWidth * dpr, H = 140 * dpr
+    if (cv.width !== Math.floor(W) || cv.height !== Math.floor(H)) {
+      cv.width = Math.max(1, Math.floor(W)); cv.height = Math.max(1, Math.floor(H))
+    }
+    const mid = Math.floor(cv.height / 2)
+    g.clearRect(0,0,cv.width,cv.height)
+    g.fillStyle = '#0b1220'; g.fillRect(0,0,cv.width,cv.height)
+    g.strokeStyle = '#1f2937'; g.lineWidth = 1 * dpr
+    g.beginPath(); g.moveTo(0, mid+0.5*dpr); g.lineTo(cv.width, mid+0.5*dpr); g.stroke()
+
+    const n = an.fftSize
+    if (!ampDrawBufRef.current || ampDrawBufRef.current.length !== n) {
+      ampDrawBufRef.current = new Float32Array(n)
+    }
+    const buf = ampDrawBufRef.current
+    an.getFloatTimeDomainData(buf)
+
+    const grad = g.createLinearGradient(0,0,0,cv.height)
+    grad.addColorStop(0,'#60a5fa'); grad.addColorStop(1,'#a78bfa')
+    g.strokeStyle = grad; g.lineWidth = 2 * dpr; g.beginPath()
+    for (let i=0;i<n;i++){
+      const t=i/(n-1);
+      const x=(t*(cv.width-2*dpr))+1*dpr;
+      const y=mid+(buf[i]*(cv.height*0.45));
+      if(i===0) g.moveTo(x,y); else g.lineTo(x,y)
+    }
+    g.stroke()
+  }
+  async function startAmp() {
+    if (ampRunning) return
+    setAmpStatus('시작 준비…')
+    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext
+    const ctx = new Ctx()
+    ampCtxRef.current = ctx
+
+    // nodes
+    const input = ctx.createGain()
+    const pre = ctx.createGain()
+    const shaper = ctx.createWaveShaper()
+    const low = ctx.createBiquadFilter(); low.type = 'lowshelf'; low.frequency.value = 250
+    const high = ctx.createBiquadFilter(); high.type = 'highshelf'; high.frequency.value = 2500
+    const master = ctx.createGain()
+    input.connect(pre); pre.connect(shaper).connect(low).connect(high).connect(master)
+    const analyser = ctx.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = 0.10
+    master.connect(analyser).connect(ctx.destination)
+
+    // 🔼 AMP processed tone를 MediaStreamDestination으로도 출력(녹음용)
+    const msDest = ctx.createMediaStreamDestination()
+    master.connect(msDest)
+    ampMsDestRef.current = msDest
+
+    ampInputRef.current = input; ampPreRef.current = pre; ampShaperRef.current = shaper
+    ampLowRef.current = low; ampHighRef.current = high; ampMasterRef.current = master
+    ampAnalyserRef.current = analyser
+
+    applyAmpParams()
+
+    // 최초 입력은 현재 옵션에 맞춰 핫스왑 useEffect에서 연결됨
+    // scope loop
+    const loop = () => { drawAmpScope(); ampRafRef.current = requestAnimationFrame(loop) }
+    clearAmpScope(); loop()
+    setAmpRunning(true)
+    setAmpStatus('실행 중')
+  }
+  function stopAmp() {
+    if (ampRafRef.current) { cancelAnimationFrame(ampRafRef.current); ampRafRef.current = null }
+    try { ampInputSrcRef.current?.disconnect() } catch {}
+    try { ampInputRef.current?.disconnect() } catch {}
+    try { ampPreRef.current?.disconnect() } catch {}
+    try { ampShaperRef.current?.disconnect() } catch {}
+    try { ampLowRef.current?.disconnect() } catch {}
+    try { ampHighRef.current?.disconnect() } catch {}
+    try { ampMasterRef.current?.disconnect() } catch {}
+    try { ampAnalyserRef.current?.disconnect() } catch {}
+    if (ampOscRef.current) { try { ampOscRef.current.stop() } catch {}; try { ampOscRef.current.disconnect() } catch {} }
+    if (ampOscGainRef.current) { try { ampOscGainRef.current.disconnect() } catch {} }
+    if (ampStreamRef.current) { ampStreamRef.current.getTracks().forEach(t=>t.stop()); ampStreamRef.current = null }
+    if (ampCtxRef.current) { try { ampCtxRef.current.close() } catch {}; ampCtxRef.current = null }
+    ampInputRef.current = null; ampPreRef.current = null; ampShaperRef.current = null
+    ampLowRef.current = null; ampHighRef.current = null; ampMasterRef.current = null
+    ampAnalyserRef.current = null; ampMsDestRef.current = null
+    setAmpRunning(false)
+    setAmpStatus('정지')
+    clearAmpScope()
+  }
+
+  useEffect(() => { applyAmpParams() }, [ampGain, ampTone, ampMaster])
+  useEffect(() => () => { stopAmp() }, [])
+
+  // 🔼 AMP 입력 소스 핫스왑 (테스트톤/장치 변경 즉시 반영)
+  useEffect(() => {
+    if (!ampRunning || !ampCtxRef.current || !ampInputRef.current) return;
+    const ctx = ampCtxRef.current;
+
+    // 이전 입력 소스 분리
+    try { ampInputSrcRef.current?.disconnect(); } catch {}
+    ampInputSrcRef.current = null;
+
+    (async () => {
+      if (ampTestTone) {
+        if (ampStreamRef.current) { ampStreamRef.current.getTracks().forEach(t=>t.stop()); ampStreamRef.current = null; }
+        if (ampOscRef.current) { try { ampOscRef.current.stop() } catch {}; try { ampOscRef.current.disconnect() } catch {}; }
+        if (ampOscGainRef.current) { try { ampOscGainRef.current.disconnect() } catch {}; }
+
+        const osc = ctx.createOscillator(); osc.type='sine'; osc.frequency.value = 110;
+        const g = ctx.createGain(); g.gain.value = 0.5;
+        osc.connect(g).connect(ampInputRef.current!);
+        ampOscRef.current = osc; ampOscGainRef.current = g;
+        ampInputSrcRef.current = g;
+        osc.start();
+        return;
+      }
+
+      if (ampOscRef.current) { try { ampOscRef.current.stop() } catch {}; try { ampOscRef.current.disconnect() } catch {}; ampOscRef.current = null; }
+      if (ampOscGainRef.current) { try { ampOscGainRef.current.disconnect() } catch {}; ampOscGainRef.current = null; }
+
+      if (ampStreamRef.current) { ampStreamRef.current.getTracks().forEach(t=>t.stop()); ampStreamRef.current = null; }
+      const constraints = deviceId ? { audio: { deviceId: { exact: deviceId } } } : { audio: true }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints as any)
+        ampStreamRef.current = stream
+        const src = ctx.createMediaStreamSource(stream)
+        src.connect(ampInputRef.current!)
+        ampInputSrcRef.current = src
+      } catch (err) {
+        console.warn('AMP input error', err)
+      }
+    })();
+  }, [ampTestTone, deviceId, ampRunning])
+
+  // 🔼 스코프 리사이즈 대응
+  useEffect(() => {
+    const cv = ampCanvasRef.current; if (!cv) return
+    const ro = new ResizeObserver(() => drawAmpScope())
+    ro.observe(cv)
+    return () => ro.disconnect()
+  }, [ampRunning])
+
   /* ===== 오토플레이 해제 ===== */
   async function ensureUnlocked() {
     const el = midiEl.current; if (!el) return
@@ -231,10 +443,48 @@ export default function PracticeMixPage() {
     try { await el.play().catch(()=>{}); el.pause() } finally { el.muted = prev }
   }
 
-  /* ===== 녹음 시작 ===== */
+  /* ===== AMP 녹음 제어 ===== */
+  function startAmpRecording() {
+    if (!ampMsDestRef.current) { alert('AMP가 실행 중이어야 합니다.'); return }
+    try {
+      const mime = (window as any).MediaRecorder?.isTypeSupported?.('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : ((window as any).MediaRecorder?.isTypeSupported?.('audio/webm') ? 'audio/webm' : '')
+      const rec = new MediaRecorder(ampMsDestRef.current.stream, mime ? { mimeType: mime } : undefined)
+      ampChunksRef.current = []
+      rec.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) ampChunksRef.current.push(ev.data) }
+      rec.onstop = () => {
+        const blob = new Blob(ampChunksRef.current, { type: mime || 'audio/webm' })
+        if (procBlobUrl) URL.revokeObjectURL(procBlobUrl)
+        const url = URL.createObjectURL(blob)
+        setProcBlobUrl(url)
+        ampChunksRef.current = []
+      }
+      rec.start()
+      ampRecorderRef.current = rec
+      setAmpRecording(true)
+    } catch (e:any) {
+      alert('AMP 녹음을 시작할 수 없습니다: ' + (e?.message || String(e)))
+    }
+  }
+  function stopAmpRecording() {
+    const rec = ampRecorderRef.current
+    if (rec && rec.state !== 'inactive') rec.stop()
+    setAmpRecording(false)
+  }
+
+  /* ===== 녹음 시작/정지 플로우 ===== */
   async function startRecordingFlow() {
     if (!midiAudioUrl && !bassOnly) { alert('먼저 MIDI 백킹이 준비되어야 합니다. (또는 “베이스만 녹음”을 켜세요)'); return }
-    if (!recording) await start()
+
+    if (applyAmpToRec) {
+      if (!ampRunning) { await startAmp().catch(()=>{}) }
+      if (!ampMsDestRef.current) { alert('AMP가 아직 초기화되지 않았습니다. AMP를 시작한 뒤 다시 시도하세요.'); return }
+      if (!ampRecording) startAmpRecording()
+    } else {
+      if (!recording) await start()
+    }
+
     await ensureUnlocked()
     await playCountIn(COUNTIN_BEATS, tempoBpm)
 
@@ -245,6 +495,10 @@ export default function PracticeMixPage() {
     }
     setPlaying(true)
     if (!rafRef.current) tick()
+  }
+  function stopRecordingFlow() {
+    if (applyAmpToRec) stopAmpRecording()
+    else stop()
   }
 
   /* ===== 트랜스포트 / HUD ===== */
@@ -361,7 +615,7 @@ export default function PracticeMixPage() {
       })
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null }
     }
-  }, [midiAudioUrl, bassTrimUrl, blobUrl, chordCues, fallbackCues])
+  }, [midiAudioUrl, bassTrimUrl, activeBlobUrl, chordCues, fallbackCues])
 
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }, [])
 
@@ -382,9 +636,9 @@ export default function PracticeMixPage() {
     setMergedUrl(null)
 
     let bass: AudioBuffer | null = bassBuffer
-    if (!bass && blobUrl) {
+    if (!bass && activeBlobUrl) {
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
-      const arr = await (await fetch(blobUrl)).arrayBuffer()
+      const arr = await (await fetch(activeBlobUrl)).arrayBuffer()
       const src = await ctx.decodeAudioData(arr.slice(0))
       const startSample = Math.floor(preRollSec * src.sampleRate)
       const out = ctx.createBuffer(src.numberOfChannels, Math.max(0, src.length - startSample), src.sampleRate)
@@ -402,6 +656,7 @@ export default function PracticeMixPage() {
     setMergedUrl(url)
   }
   useEffect(() => () => { if (mergedUrl) URL.revokeObjectURL(mergedUrl) }, [mergedUrl])
+  useEffect(() => () => { if (procBlobUrl) URL.revokeObjectURL(procBlobUrl) }, [procBlobUrl])
 
   /* ===== 파생 UI 데이터 ===== */
   const cuesForUI = chordCues.length ? chordCues : fallbackCues
@@ -547,14 +802,63 @@ export default function PracticeMixPage() {
       <section className="pmx-panel">
         <h3>🎙 베이스 녹음</h3>
         <div className="row" style={{gap:12, alignItems:'center'}}>
-          {!recording
+          {!(recording || ampRecording)
             ? <button className="btn primary" onClick={startRecordingFlow}>● 녹음 시작 (카운트인 {COUNTIN_BEATS}박)</button>
-            : <button className="btn danger" onClick={stop}>■ 정지</button>}
+            : <button className="btn danger" onClick={stopRecordingFlow}>■ 정지</button>}
           <label className="row" style={{gap:6}}>
             <input type="checkbox" checked={bassOnly} onChange={e=>setBassOnly(e.target.checked)} />
             베이스만 녹음(백킹 미재생)
           </label>
         </div>
+      </section>
+
+      {/* AMP (Gain / Tone / Master) */}
+      <section className="pmx-panel">
+        <h3>🎛 AMP (Gain / Tone / Master)</h3>
+        <div className="row" style={{gap:12, alignItems:'center', flexWrap:'wrap'}}>
+          <label className="row" style={{gap:6}}>
+            <input type="checkbox" checked={ampTestTone} onChange={e=>setAmpTestTone(e.target.checked)} />
+            테스트톤(110Hz) 사용
+          </label>
+          <label className="row" style={{gap:6}}>
+            <input type="checkbox" checked={applyAmpToRec} onChange={e=>setApplyAmpToRec(e.target.checked)} />
+            녹음에 앰프 톤 적용
+          </label>
+          {!ampRunning
+            ? <button className="btn" onClick={()=>startAmp().catch(err=>alert(err?.message||String(err)))}>⚡ 시작</button>
+            : <button className="btn danger" onClick={stopAmp}>■ 정지</button>}
+          <span className="hint" style={{marginLeft:'auto'}}>{ampStatus}</span>
+        </div>
+
+        {/* Knobs */}
+        <div className="amp-grid" style={{display:'flex', gap:20, flexWrap:'wrap', alignItems:'flex-end', marginTop:6}}>
+          <DialKnob label="Gain"   value={ampGain}   min={0}  max={10} step={0.1} defaultValue={4.0}  onChange={setAmpGain} />
+          <DialKnob label="Tone"   value={ampTone}   min={-5} max={5}  step={0.1} defaultValue={0.0}  onChange={setAmpTone} />
+          <DialKnob label="Master" value={ampMaster} min={0}  max={10} step={0.1} defaultValue={7.5} onChange={setAmpMaster} />
+        </div>
+
+        {/* Scope */}
+        <div className="scope" style={{background:'#0b1220', border:'1px dashed #1f2937', borderRadius:12, padding:8, marginTop:12}}>
+          <canvas ref={ampCanvasRef} style={{width:'100%', height:140, display:'block'}} />
+        </div>
+
+        {/* Local styles for knobs */}
+        <style>{String.raw`
+          .knb { display:inline-flex; flex-direction:column; align-items:center; gap:6px; width:96px }
+          .knb .dial {
+            width:68px; height:68px; border-radius:50%;
+            background: radial-gradient(140% 140% at 30% 30%, #111827, #0b1220);
+            border:1px solid #1f2937; position:relative; transition:transform .05s linear;
+            box-shadow: inset 0 2px 6px rgba(0,0,0,.35), 0 1px 0 rgba(255,255,255,.04);
+            cursor:grab;
+          }
+          .knb .indicator {
+            position:absolute; left:50%; top:6px; width:2px; height:24px; background:#e5e7eb;
+            transform:translateX(-50%); border-radius:2px; box-shadow:0 0 0 1px rgba(0,0,0,.25);
+          }
+          .knb .t { font-size:12px; color:#a3b1c7; text-transform:uppercase; letter-spacing:.06em; }
+          .knb .v { font-size:12px; color:#e5e7eb; opacity:.9; }
+        `}</style>
       </section>
 
       {/* Bass 미리듣기 & 믹서 */}
@@ -571,8 +875,8 @@ export default function PracticeMixPage() {
               <div className="hint">볼륨 {Math.round(bassVol*100)}%</div>
             </div>
             <div className="preview">
-              {(bassTrimUrl || blobUrl)
-                ? <audio ref={bassEl} src={(bassTrimUrl ?? blobUrl)!} preload="metadata" controls
+              {(bassTrimUrl || activeBlobUrl)
+                ? <audio ref={bassEl} src={(bassTrimUrl ?? activeBlobUrl)!} preload="metadata" controls
                          onLoadedMetadata={syncVolumesAndMutes}
                          onPlay={syncVolumesAndMutes}
                          onError={(e)=>console.warn('Bass audio error', e)} />
@@ -584,7 +888,7 @@ export default function PracticeMixPage() {
 
         {/* 단일 트랜스포트 */}
         <div className="transport" style={{marginTop:12}}>
-          <button className="btn" onClick={playing ? pause : play} disabled={!midiAudioUrl && !bassTrimUrl && !blobUrl}>
+          <button className="btn" onClick={playing ? pause : play} disabled={!midiAudioUrl && !bassTrimUrl && !activeBlobUrl}>
             {playing ? '⏸ 일시정지 (Space)' : '▶︎ 재생 (Space)'}
           </button>
           <button className="btn" onClick={stopAll}>⏹ 정지</button>
@@ -607,7 +911,7 @@ export default function PracticeMixPage() {
       {/* 합치기 & 다운로드 */}
       <section className="pmx-panel">
         <h3>⬇️ 합치기 & 다운로드</h3>
-        <button className="btn" onClick={mergeAndExport} disabled={!midiBuffer || (!bassBuffer && !blobUrl)}>
+        <button className="btn" onClick={mergeAndExport} disabled={!midiBuffer || (!bassBuffer && !activeBlobUrl)}>
           음원 합치기 (WAV 생성)
         </button>
         {mergedUrl && (
@@ -632,4 +936,52 @@ function formatTime(sec: number) {
   const m = Math.floor(sec / 60)
   const s = Math.floor(sec % 60).toString().padStart(2, '0')
   return `${m}:${s}`
+}
+
+/* ===== DialKnob component ===== */
+import React from 'react'
+type DialProps = {
+  label: string
+  value: number
+  min: number
+  max: number
+  step?: number
+  defaultValue?: number
+  onChange: (v:number)=>void
+}
+function clamp(v:number, min:number, max:number){ return Math.max(min, Math.min(max, v)) }
+export function DialKnob({label, value, min, max, step=0.1, defaultValue, onChange}: DialProps){
+  const dialRef = React.useRef<HTMLDivElement | null>(null)
+  const startVal = React.useRef(value)
+  const startY = React.useRef(0)
+  const onDown = (e: React.MouseEvent) => {
+    startVal.current = value
+    startY.current = e.clientY
+    const onMove = (ev: MouseEvent) => {
+      const dy = startY.current - ev.clientY
+      let v = startVal.current + (max - min) * (dy / 150)
+      v = Math.round(v / step) * step
+      onChange(clamp(v, min, max))
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+  const onDbl = () => { if (typeof defaultValue === 'number') onChange(defaultValue) }
+  const angle = 270 * ((value - min) / (max - min)) - 135
+  return (
+    <div className="knb" role="slider" aria-valuemin={min} aria-valuemax={max} aria-valuenow={value}>
+      <div ref={dialRef} className="dial" onMouseDown={onDown} onDoubleClick={onDbl}
+           style={{transform:`rotate(${angle}deg)`}}>
+        <div className="indicator" />
+      </div>
+      <div className="knb-label">
+        <div className="t">{label}</div>
+        <div className="v">{value.toFixed(1)}</div>
+      </div>
+    </div>
+  )
 }
