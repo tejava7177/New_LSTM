@@ -67,7 +67,7 @@ function RecordingWaveScroll({
     }
     const g = cv.getContext("2d");
     if (g) {
-      g.fillStyle = "#0b1220";
+      g.fillStyle = "#ffffff";
       g.fillRect(0, 0, cv.width, cv.height);
     }
   };
@@ -112,7 +112,7 @@ function RecordingWaveScroll({
 
     const an = mode === "amp" ? (ampAnalyser || null) : (analyserRef.current || null);
     if (!an) {
-      g.fillStyle = "#0b1220";
+      g.fillStyle = "#ffffff";
       g.fillRect(0, 0, cv.width, cv.height);
       rafRef.current = requestAnimationFrame(draw);
       return;
@@ -121,7 +121,7 @@ function RecordingWaveScroll({
     // scroll left by 1px
     g.drawImage(cv, -1, 0);
     // clear the rightmost column
-    g.fillStyle = "#0b1220";
+    g.fillStyle = "#ffffff";
     g.fillRect(cv.width - 1, 0, 1, cv.height);
 
     const buf = new Float32Array(an.fftSize);
@@ -195,12 +195,50 @@ function RecordingWaveScroll({
   }, []);
 
   return (
-    <div className={className} style={{ background: "#0b1220", border: "1px dashed #1f2937", borderRadius: 12, padding: 8 }}>
+    <div className={className} style={{ background: "#ffffff", border: "1px dashed #e5e7eb", borderRadius: 12, padding: 8 }}>
       <canvas ref={canvasRef} style={{ width: "100%", height, display: "block" }} />
     </div>
   );
 }
 // === End Inline Visualizer ===
+
+function StepChip({ num, children }: { num: number; children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '10px 14px',
+        borderRadius: 12,
+        background: '#ffffff',
+        border: '1px solid #e5e7eb',
+        boxShadow: '0 1px 0 rgba(0,0,0,0.04) inset',
+        flex: '0 0 auto',
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          display: 'inline-flex',
+          width: 28,
+          height: 28,
+          borderRadius: 16,
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontWeight: 700,
+          background: '#2563eb',
+          color: '#fff',
+          boxShadow: '0 1px 0 rgba(255,255,255,0.35) inset',
+          flex: '0 0 auto',
+        }}
+      >
+        {num}
+      </span>
+      <span style={{ fontSize: 15, lineHeight: '20px' }}>{children}</span>
+    </div>
+  )
+}
 
 export default function PracticeMixPage() {
   /* ===== 라우터 state ===== */
@@ -440,6 +478,61 @@ export default function PracticeMixPage() {
   /* ===== 렌더 ===== */
   return (
     <div className="pmx-wrap">
+      {/* Hero & Onboarding */}
+      <header
+        className="pmx-hero"
+        style={{
+          marginBottom: 16,
+          borderRadius: 16,
+          overflow: 'hidden',
+          background: 'linear-gradient(180deg, #ffffff, #f8fafc)',
+          border: '1px solid #e5e7eb',
+        }}
+      >
+        <div style={{ padding: '16px 18px 12px 18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+            <h1 style={{ margin: 0, fontSize: 22, letterSpacing: '.1px' }}>C.B.B - Practice Mix</h1>
+            <span
+              style={{
+                padding: '2px 8px',
+                borderRadius: 999,
+                fontSize: 12,
+                background: 'rgba(99,102,241,.25)',
+                border: '1px solid rgba(99,102,241,.45)',
+              }}
+            >
+              Beta
+            </span>
+          </div>
+          <p style={{ margin: 0, opacity: 0.9 }}>
+            마이크와 백킹을 한 화면에서 녹음·미리듣기하고, 마지막엔 WAV로 합칠 수 있어요.
+          </p>
+        </div>
+
+        {/* Steps */}
+        <div
+          style={{
+            display: 'flex',
+            gap: 12,
+            padding: '0 12px 12px 12px',
+            flexWrap: 'nowrap',
+            overflowX: 'auto',
+            whiteSpace: 'nowrap',
+            WebkitOverflowScrolling: 'touch'
+          }}
+        >
+          <StepChip num={1}>장치를 선택하고 마이크 권한을 허용하세요.</StepChip>
+          <StepChip num={2}>
+            백킹과 함께 <b>재생/녹음</b>하세요. <span style={{ opacity: 0.8 }}>(R: 녹음 / Space: 재생)</span>
+          </StepChip>
+          <StepChip num={3}>
+            상단 HUD에서 <b>현재/다음 코드</b>를 확인하세요.
+          </StepChip>
+          <StepChip num={4}>
+            끝나면 <b>합치기</b>로 WAV를 받으세요.
+          </StepChip>
+        </div>
+      </header>
       {/* 입력 장치 */}
       <section className="pmx-panel">
         <div style={{display:'flex', alignItems:'center', gap:8}}>
@@ -490,7 +583,7 @@ export default function PracticeMixPage() {
             <input type="file" accept=".mid,.midi" onChange={e => {
               const f = e.target.files?.[0]; if (f) handleMidiFile(f)
             }}/>
-            <span>파일 선택</span>
+            {/*<span>파일 선택</span>*/}
           </label>
           {midiFile && <span className="hint">{midiFile.name}</span>}
         </div>
@@ -560,7 +653,7 @@ export default function PracticeMixPage() {
             <DialKnob label="Master" value={amp.master} min={0}  max={10} step={0.1} defaultValue={7.5} onChange={amp.setMaster} />
           </div>
 
-          <div className="scope" style={{background:'#0b1220', border:'1px dashed #1f2937', borderRadius:12, padding:8, marginTop:12}}>
+          <div className="scope" style={{background:'#ffffff', border:'1px dashed #e5e7eb', borderRadius:12, padding:8, marginTop:12}}>
             <AmpScope analyser={amp.analyser} />
           </div>
         </div>
@@ -614,6 +707,8 @@ export default function PracticeMixPage() {
             : <button className="btn danger" style={{marginLeft:12}} onClick={async ()=>{
                 if (applyAmpToRec) { await amp.stopAmpRecording() } else { await stop() }
                 setRecVizActive(false)
+                // Also stop any ongoing playback when recording is stopped
+                pause()
               }}>■ 정지</button>}
         </div>
       </section>
