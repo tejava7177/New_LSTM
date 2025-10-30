@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+// import Accordion from '../components/Accordion';  // 미사용: 제거
 import { useLocation } from 'react-router-dom'
 
 // existing components/hooks from your app
@@ -28,6 +29,178 @@ type NavState = {
   midiUrl?: string; // optional override
   wavUrl?: string;  // optional override
 }
+
+// === Inline Scrolling Waveform Visualizer (replaces index_record.html's "파형-스크롤") ===
+type WaveScrollMode = "amp" | "raw";
+function RecordingWaveScroll({
+  active,
+  mode,
+  deviceId,
+  ampAnalyser,
+  height = 160,
+  className,
+}: {
+  active: boolean;
+  mode: WaveScrollMode;
+  deviceId?: string;
+  ampAnalyser?: AnalyserNode | null;
+  height?: number;
+  className?: string;
+}) {
+  const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const rafRef = React.useRef<number | null>(null);
+
+  // raw mode resources
+  const [ctx, setCtx] = React.useState<AudioContext | null>(null);
+  const srcRef = React.useRef<MediaStreamAudioSourceNode | null>(null);
+  const analyserRef = React.useRef<AnalyserNode | null>(null);
+  const rawStreamRef = React.useRef<MediaStream | null>(null);
+
+  const setupCanvas = () => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const dpr = Math.max(1, (window.devicePixelRatio || 1));
+    const W = Math.floor(cv.clientWidth * dpr);
+    const H = Math.floor(height * dpr);
+    if (cv.width !== W || cv.height !== H) {
+      cv.width = W; cv.height = H;
+    }
+    const g = cv.getContext("2d");
+    if (g) {
+      g.fillStyle = "#0b1220";
+      g.fillRect(0, 0, cv.width, cv.height);
+    }
+  };
+
+  async function openRawAnalyser() {
+    if (ctx || analyserRef.current) return;
+    const Ctx: typeof AudioContext = (window as any).AudioContext || (window as any).webkitAudioContext;
+    const c = new Ctx();
+    setCtx(c);
+    const constraints: MediaStreamConstraints =
+      deviceId ? { audio: { deviceId: { exact: deviceId } as any } } : { audio: true };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    rawStreamRef.current = stream;
+
+    const src = c.createMediaStreamSource(stream);
+    srcRef.current = src;
+
+    const an = c.createAnalyser();
+    an.fftSize = 2048;
+    an.smoothingTimeConstant = 0.12;
+    src.connect(an);
+    analyserRef.current = an;
+  }
+
+  function closeRawAnalyser() {
+    try { srcRef.current?.disconnect(); } catch {}
+    analyserRef.current = null;
+    srcRef.current = null;
+    if (rawStreamRef.current) {
+      rawStreamRef.current.getTracks().forEach(t => t.stop());
+      rawStreamRef.current = null;
+    }
+    if (ctx) {
+      try { ctx.close(); } catch {}
+      setCtx(null);
+    }
+  }
+
+  const draw = () => {
+    const cv = canvasRef.current; if (!cv) return;
+    const g = cv.getContext("2d"); if (!g) return;
+
+    const an = mode === "amp" ? (ampAnalyser || null) : (analyserRef.current || null);
+    if (!an) {
+      g.fillStyle = "#0b1220";
+      g.fillRect(0, 0, cv.width, cv.height);
+      rafRef.current = requestAnimationFrame(draw);
+      return;
+    }
+
+    // scroll left by 1px
+    g.drawImage(cv, -1, 0);
+    // clear the rightmost column
+    g.fillStyle = "#0b1220";
+    g.fillRect(cv.width - 1, 0, 1, cv.height);
+
+    const buf = new Float32Array(an.fftSize);
+    an.getFloatTimeDomainData(buf);
+
+    const step = 8;
+    let min = 1, max = -1;
+    for (let i = 0; i < buf.length; i += step) {
+      let lmin = 1, lmax = -1;
+      for (let k = 0; k < step && i + k < buf.length; k++) {
+        const v = buf[i + k];
+        if (v < lmin) lmin = v;
+        if (v > lmax) lmax = v;
+      }
+      if (lmin < min) min = lmin;
+      if (lmax > max) max = lmax;
+    }
+    const mid = Math.floor(cv.height / 2);
+    const y1 = mid + Math.floor(min * (cv.height * 0.44));
+    const y2 = mid + Math.floor(max * (cv.height * 0.44));
+
+    const grad = g.createLinearGradient(cv.width - 1, 0, cv.width - 1, cv.height);
+    grad.addColorStop(0, "#60a5fa");
+    grad.addColorStop(1, "#a78bfa");
+    g.strokeStyle = grad;
+
+    g.beginPath();
+    g.moveTo(cv.width - 1 + 0.5, y1 + 0.5);
+    g.lineTo(cv.width - 1 + 0.5, y2 + 0.5);
+    g.stroke();
+
+    rafRef.current = requestAnimationFrame(draw);
+  };
+
+  React.useEffect(() => {
+    setupCanvas();
+
+    if (!active) {
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+      if (mode === "raw") closeRawAnalyser();
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        if (mode === "raw") {
+          await openRawAnalyser();
+        } else {
+          if (!ampAnalyser) return;
+        }
+        if (!cancelled) {
+          if (rafRef.current) cancelAnimationFrame(rafRef.current);
+          rafRef.current = requestAnimationFrame(draw);
+        }
+      } catch {}
+    })();
+
+    return () => {
+      cancelled = true;
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+      if (mode === "raw") closeRawAnalyser();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, mode, deviceId, ampAnalyser]);
+
+  React.useEffect(() => {
+    const onResize = () => setupCanvas();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  return (
+    <div className={className} style={{ background: "#0b1220", border: "1px dashed #1f2937", borderRadius: 12, padding: 8 }}>
+      <canvas ref={canvasRef} style={{ width: "100%", height, display: "block" }} />
+    </div>
+  );
+}
+// === End Inline Visualizer ===
 
 export default function PracticeMixPage() {
   /* ===== 라우터 state ===== */
@@ -69,6 +242,7 @@ export default function PracticeMixPage() {
   /* ===== AMP (Gain / Tone / Master, + 녹음 적용) ===== */
   const amp = useAmp({ deviceId })
   const [applyAmpToRec, setApplyAmpToRec] = useState(false)
+  const [ampOpen, setAmpOpen] = useState(true) // 아코디언 열림/닫힘
 
   /* ===== 오디오 엘리먼트 / 트랜스포트 ===== */
   const midiEl = useRef<HTMLAudioElement>(null)
@@ -80,9 +254,10 @@ export default function PracticeMixPage() {
   const transportStartAt = useRef<number | null>(null)
   const [loop, setLoop] = useState(false)
   const [midiVol, setMidiVol] = useState(0.9)
-  const [bassVol, setBassVol] = useState(1.0)
   const [playMidi, setPlayMidi] = useState(true)
   const [playBass, setPlayBass] = useState(true)
+  const [recVizActive, setRecVizActive] = useState(false)
+  const [recVizMode, setRecVizMode] = useState<"amp" | "raw">("raw")
 
   /* ===== 카운트인 ===== */
   const COUNTIN_BEATS = navState.preRollBeats ?? 4
@@ -130,7 +305,7 @@ export default function PracticeMixPage() {
   /* ===== 트랜스포트 ===== */
   function syncVolumesAndMutes() {
     if (midiEl.current) { midiEl.current.volume = midiVol; midiEl.current.muted = !playMidi; midiEl.current.loop = loop }
-    if (bassEl.current) { bassEl.current.volume = bassVol; bassEl.current.muted = !playBass; bassEl.current.loop = loop }
+    if (bassEl.current) { bassEl.current.volume = 1.0; bassEl.current.muted = !playBass; bassEl.current.loop = loop }
   }
 
   function ensureUnlocked() {
@@ -146,6 +321,11 @@ export default function PracticeMixPage() {
     }
     await ensureUnlocked()
     await playCountIn(COUNTIN_BEATS, tempoBpm)
+
+    // Start scrolling waveform visualization in sync with recording
+    const willUseAmp = applyAmpToRec && amp.running
+    setRecVizMode(willUseAmp ? 'amp' : 'raw')
+    setRecVizActive(true)
 
     // 녹음 시작
     if (applyAmpToRec) {
@@ -198,6 +378,7 @@ export default function PracticeMixPage() {
     if (bassEl.current) bassEl.current.currentTime = 0
     transportStartAt.current = null
     setPosition(0)
+    setRecVizActive(false)
   }
   function seek(sec: number) {
     if (midiEl.current) midiEl.current.currentTime = sec
@@ -261,7 +442,9 @@ export default function PracticeMixPage() {
     <div className="pmx-wrap">
       {/* 입력 장치 */}
       <section className="pmx-panel">
-        <h3>🎛 입력 장치</h3>
+        <div style={{display:'flex', alignItems:'center', gap:8}}>
+          <h3 style={{margin:0}}>🎛 입력 장치</h3>
+        </div>
         <div className="row">
           <DeviceSelect value={deviceId} onChange={setDeviceId} />
           <button className="btn" onClick={async ()=>{ await navigator.mediaDevices.getUserMedia({ audio: true }) }}>
@@ -318,55 +501,95 @@ export default function PracticeMixPage() {
         </div>
       </section>
 
-      {/* AMP */}
-      <section className="pmx-panel">
-        <h3>🎛 AMP (Gain / Tone / Master)</h3>
-        <div className="row" style={{gap:12, alignItems:'center', flexWrap:'wrap'}}>
-          <label className="row" style={{gap:6}}>
-            <input type="checkbox" checked={amp.testTone} onChange={e=>amp.setTestTone(e.target.checked)} />
-            테스트톤(110Hz) 사용
-          </label>
-          {!amp.running
-            ? <button className="btn" onClick={()=>amp.startAmpIfNeeded().catch(err=>alert(err?.message||String(err)))}>⚡ 시작</button>
-            : <button className="btn danger" onClick={amp.stopAmp}>■ 정지</button>}
-          <label className="row" style={{gap:6, marginLeft:12}}>
-            <input type="checkbox" checked={applyAmpToRec} onChange={e=>setApplyAmpToRec(e.target.checked)} />
-            녹음에 앰프 톤 적용
-          </label>
-          <span className="hint" style={{marginLeft:'auto'}}>{amp.status}</span>
+      {/* AMP — 아코디언 */}
+      <section className="pmx-panel" aria-label="AMP section">
+        <div
+          className="pmx-accordion-header"
+          style={{
+            display:'flex', alignItems:'center', gap:12,
+            paddingBottom:8, borderBottom:'1px solid rgba(255,255,255,0.06)', marginBottom:12
+          }}
+        >
+          <h3 style={{margin:0, flex:1}}>🎛 AMP (Gain / Tone / Master)</h3>
+
+          {/* 오른쪽 원형 토글 버튼 */}
+          <button
+            type="button"
+            aria-expanded={ampOpen}
+            aria-controls="amp-accordion-body"
+            onClick={()=>setAmpOpen(o=>!o)}
+            className="btn"
+            style={{
+              width:36, height:36, borderRadius:24, display:'inline-flex',
+              alignItems:'center', justifyContent:'center',
+              background:'rgba(255,255,255,0.08)', border:'1px solid rgba(255,255,255,0.12)'
+            }}
+            title={ampOpen ? '접기' : '펼치기'}
+          >
+            {/* chevron-down 아이콘 (열림 시 위로 회전) */}
+            <svg
+              width="18" height="18" viewBox="0 0 24 24"
+              style={{ transform: ampOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition:'transform .18s ease' }}
+              aria-hidden="true"
+            >
+              <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
         </div>
 
-        <div className="amp-grid" style={{display:'flex', gap:20, flexWrap:'wrap', alignItems:'flex-end', marginTop:6}}>
-          <DialKnob label="Gain"   value={amp.gain}   min={0}  max={10} step={0.1} defaultValue={4.0}  onChange={amp.setGain} />
-          <DialKnob label="Tone"   value={amp.tone}   min={-5} max={5}  step={0.1} defaultValue={0.0}  onChange={amp.setTone} />
-          <DialKnob label="Master" value={amp.master} min={0}  max={10} step={0.1} defaultValue={7.5} onChange={amp.setMaster} />
-        </div>
+        {/* 아코디언 본문 */}
+        <div id="amp-accordion-body" style={{ display: ampOpen ? 'block' : 'none' }}>
+          <div className="row" style={{gap:12, alignItems:'center', flexWrap:'wrap'}}>
+            <label className="row" style={{gap:6}}>
+              <input type="checkbox" checked={amp.testTone} onChange={e=>amp.setTestTone(e.target.checked)} />
+              테스트톤(110Hz) 사용
+            </label>
+            {!amp.running
+              ? <button className="btn" onClick={()=>amp.startAmpIfNeeded().catch(err=>alert(err?.message||String(err)))}>⚡ 시작</button>
+              : <button className="btn danger" onClick={amp.stopAmp}>■ 정지</button>}
+            <label className="row" style={{gap:6, marginLeft:12}}>
+              <input type="checkbox" checked={applyAmpToRec} onChange={e=>setApplyAmpToRec(e.target.checked)} />
+              녹음에 앰프 톤 적용
+            </label>
+            <span className="hint" style={{marginLeft:'auto'}}>{amp.status}</span>
+          </div>
 
-        <div className="scope" style={{background:'#0b1220', border:'1px dashed #1f2937', borderRadius:12, padding:8, marginTop:12}}>
-          <AmpScope analyser={amp.analyser} />
+          <div className="amp-grid" style={{display:'flex', gap:20, flexWrap:'wrap', alignItems:'flex-end', marginTop:6}}>
+            <DialKnob label="Gain"   value={amp.gain}   min={0}  max={10} step={0.1} defaultValue={4.0}  onChange={amp.setGain} />
+            <DialKnob label="Tone"   value={amp.tone}   min={-5} max={5}  step={0.1} defaultValue={0.0}  onChange={amp.setTone} />
+            <DialKnob label="Master" value={amp.master} min={0}  max={10} step={0.1} defaultValue={7.5} onChange={amp.setMaster} />
+          </div>
+
+          <div className="scope" style={{background:'#0b1220', border:'1px dashed #1f2937', borderRadius:12, padding:8, marginTop:12}}>
+            <AmpScope analyser={amp.analyser} />
+          </div>
         </div>
       </section>
 
-      {/* 베이스 미리듣기 */}
+      {/* 베이스 미리듣기 & 트랜스포트 */}
       <section className="pmx-panel">
         <h3>🎚 미리듣기 & 트랜스포트</h3>
-        <div className="mixer">
-          <div className="ch">
-            <div className="ch-title">Bass</div>
-            <div className="col">
-              <input type="range" min={0} max={1} step={0.01} value={bassVol} onChange={e=>setBassVol(Number(e.target.value))}/>
-              <div className="hint">볼륨 {Math.round(bassVol*100)}%</div>
-            </div>
-            <div className="preview">
-              {(bassTrimUrl || activeBlobUrl)
-                ? <audio ref={bassEl} src={(bassTrimUrl ?? activeBlobUrl)!} preload="metadata" controls
-                         onLoadedMetadata={syncVolumesAndMutes}
-                         onPlay={syncVolumesAndMutes} />
-                : <div className="thin">녹음 후 재생 가능</div>}
-            </div>
-          </div>
+
+        {/* 파형-스크롤 시각화: 녹음 시작/정지와 연동 */}
+        <RecordingWaveScroll
+          active={recVizActive}
+          mode={recVizMode}
+          deviceId={deviceId || undefined}
+          ampAnalyser={amp.analyser || undefined}
+          height={160}
+          className="scope"
+        />
+
+        {/* Bass 프리뷰(볼륨 슬라이더 제거, AMP가 음색/볼륨 담당) */}
+        <div className="preview" style={{marginTop:12}}>
+          {(bassTrimUrl || activeBlobUrl)
+            ? <audio ref={bassEl} src={(bassTrimUrl ?? activeBlobUrl)!} preload="metadata" controls
+                     onLoadedMetadata={syncVolumesAndMutes}
+                     onPlay={syncVolumesAndMutes} />
+            : <div className="thin">녹음 후 재생 가능</div>}
         </div>
 
+        {/* 트랜스포트 */}
         <div className="transport" style={{marginTop:12}}>
           <button className="btn" onClick={playing ? pause : play} disabled={!midiAudioUrl && !bassTrimUrl && !activeBlobUrl}>
             {playing ? '⏸ 일시정지' : '▶︎ 재생'}
@@ -385,11 +608,12 @@ export default function PracticeMixPage() {
             <span className="hint">루프</span>
           </label>
 
-          {/* 녹음 버튼 */}
+          {/* 녹음 버튼(시각화와 통합) */}
           {!recording && !amp.ampRecording
             ? <button className="btn primary" style={{marginLeft:12}} onClick={startRecordingFlow}>● 녹음 시작</button>
             : <button className="btn danger" style={{marginLeft:12}} onClick={async ()=>{
                 if (applyAmpToRec) { await amp.stopAmpRecording() } else { await stop() }
+                setRecVizActive(false)
               }}>■ 정지</button>}
         </div>
       </section>
