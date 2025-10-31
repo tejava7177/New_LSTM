@@ -1,3 +1,4 @@
+// frontend/src/components/DialKnob.tsx
 import React from 'react'
 
 type DialProps = {
@@ -9,12 +10,13 @@ type DialProps = {
   defaultValue?: number
   onChange: (v:number)=>void
 }
+
 function clamp(v:number, min:number, max:number){ return Math.max(min, Math.min(max, v)) }
 
-export function DialKnob({label, value, min, max, step=0.1, defaultValue, onChange}: DialProps){
-  const dialRef = React.useRef<HTMLDivElement | null>(null)
+export default function DialKnob({label, value, min, max, step=0.1, defaultValue, onChange}: DialProps){
   const startVal = React.useRef(value)
   const startY = React.useRef(0)
+
   const onDown = (e: React.MouseEvent) => {
     startVal.current = value
     startY.current = e.clientY
@@ -31,11 +33,13 @@ export function DialKnob({label, value, min, max, step=0.1, defaultValue, onChan
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }
+
   const onDbl = () => { if (typeof defaultValue === 'number') onChange(defaultValue) }
   const angle = 270 * ((value - min) / (max - min)) - 135
+
   return (
     <div className="knb" role="slider" aria-valuemin={min} aria-valuemax={max} aria-valuenow={value}>
-      <div ref={dialRef} className="dial" onMouseDown={onDown} onDoubleClick={onDbl}
+      <div className="dial" onMouseDown={onDown} onDoubleClick={onDbl}
            style={{transform:`rotate(${angle}deg)`}}>
         <div className="indicator" />
       </div>
@@ -43,6 +47,7 @@ export function DialKnob({label, value, min, max, step=0.1, defaultValue, onChan
         <div className="t">{label}</div>
         <div className="v">{value.toFixed(1)}</div>
       </div>
+
       <style>{String.raw`
         .knb { display:inline-flex; flex-direction:column; align-items:center; gap:6px; width:96px }
         .knb .dial {
