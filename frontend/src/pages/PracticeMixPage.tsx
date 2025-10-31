@@ -15,6 +15,8 @@ import ChordTimeline from '../components/ChordTimeline'
 import DialKnob from '../components/DialKnob'
 import { useAmp } from '../hooks/useAmp'
 import { trimPreRollFromBlobUrl } from '../utils/audioTrim'
+//import LiveScrollWave from '../components/LiveScrollWave';
+import ScrollRecordWave from '../components/ScrollRecordWave';
 
 type TrackMeta = { name: string; channel?: number; instrument?: string; notes: number }
 type NavState = {
@@ -36,7 +38,21 @@ export default function PracticeMixPage() {
 
   /* ===== 입력 & 녹음 ===== */
   const [deviceId, setDeviceId] = useState<string>('')
-  const { recording, blobUrl, start, stop, error: recErr } = useMediaRecorder(deviceId || undefined)
+
+  // AMP 먼저 생성 (녹음 입력을 AMP 출력으로 보낼 수 있게 준비)
+  const amp = useAmp(deviceId || undefined)
+
+
+  // useMediaRecorder 훅 (이름 충돌 방지를 위해 start/stop 별칭)
+  // 2) 그 다음에 useMediaRecorder
+const {
+  recording, blobUrl, start: startRec, stop: stopRec, error: recErr, recordStream
+} = useMediaRecorder(deviceId || undefined, {
+  // AMP가 켜져 있으면 AMP 출력 스트림을 녹음 대상으로 사용
+  inputStream: amp.enabled ? (amp.outputStream ?? undefined) : undefined,
+  channelMode: 'dual-mono',
+});
+
 
   /* ===== MIDI 로딩 & 렌더링 ===== */
   const [midiFile, setMidiFile] = useState<File | null>(null)
@@ -70,8 +86,6 @@ export default function PracticeMixPage() {
   const [playBass, setPlayBass] = useState(true)
   const [loop, setLoop] = useState(false)
 
-  /* AMP (hook로 분리) */
-  const amp = useAmp(deviceId || undefined)
 
   /* 합치기 */
   const [mergedUrl, setMergedUrl] = useState<string | null>(null)
@@ -224,21 +238,40 @@ export default function PracticeMixPage() {
     })
   }
 
-  /* ===== 녹음 시작 ===== */
-  async function startRecordingFlow() {
-    if (!midiAudioUrl && !bassOnly) { alert('먼저 MIDI 백킹이 준비되어야 합니다. (또는 “베이스만 녹음”을 켜세요)'); return }
-    if (!recording) await start()
-    await ensureUnlocked()
-    await playCountIn(COUNTIN_BEATS, tempoBpm)
 
-    transportStartAt.current = performance.now()
-    if (!bassOnly && midiEl.current) {
-      midiEl.current.currentTime = 0
-      midiEl.current.play().catch(()=>{})
+  async function startRecordingFromTransport() {
+    if (!midiAudioUrl && !bassOnly) {
+      alert('먼저 MIDI 백킹이 준비되어야 합니다. (또는 “베이스만 녹음”을 켜세요)');
+      return;
     }
-    setPlaying(true)
-    if (!rafRef.current) tick()
+    if (!recording) await startRec();
+    await ensureUnlocked();
+    await playCountIn(COUNTIN_BEATS, tempoBpm);
+
+    transportStartAt.current = performance.now();
+    if (!bassOnly && midiEl.current) {
+      midiEl.current.currentTime = 0;
+      midiEl.current.play().catch(() => {});
+    }
+    setPlaying(true);
+    if (!rafRef.current) tick();
   }
+
+  // ■ 녹음 ‘정지’를 누르면 오디오 재생도 즉시 멈추게
+  function stopRecordingAndPlayback() {
+    // 1) 녹음 정지
+    stopRec(); // useMediaRecorder.stop()
+
+    // 2) 재생 중지 + HUD 정지
+    midiEl.current?.pause();
+    bassEl.current?.pause();
+    setPlaying(false);
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  }
+
 
   /* ===== 트랜스포트 / HUD ===== */
   function syncVolumesAndMutes() {
@@ -488,19 +521,19 @@ export default function PracticeMixPage() {
         )}
       </section>
 
-      {/* 베이스 녹음 */}
-      <section className="pmx-panel">
-        <h3>🎙 베이스 녹음</h3>
-        <div className="row" style={{gap:12, alignItems:'center'}}>
-          {!recording
-            ? <button className="btn primary" onClick={startRecordingFlow}>● 녹음 시작 (카운트인 {COUNTIN_BEATS}박)</button>
-            : <button className="btn danger" onClick={stop}>■ 정지</button>}
-          <label className="row" style={{gap:6}}>
-            <input type="checkbox" checked={bassOnly} onChange={e=>setBassOnly(e.target.checked)} />
-            베이스만 녹음(백킹 미재생)
-          </label>
-        </div>
-      </section>
+      {/*/!* 베이스 녹음 *!/*/}
+      {/*<section className="pmx-panel">*/}
+      {/*  <h3>🎙 베이스 녹음</h3>*/}
+      {/*  <div className="row" style={{gap:12, alignItems:'center'}}>*/}
+      {/*    {!recording*/}
+      {/*      ? <button className="btn primary" onClick={startRecordingFlow}>● 녹음 시작 (카운트인 {COUNTIN_BEATS}박)</button>*/}
+      {/*      : <button className="btn danger" onClick={stop}>■ 정지</button>}*/}
+      {/*    <label className="row" style={{gap:6}}>*/}
+      {/*      <input type="checkbox" checked={bassOnly} onChange={e=>setBassOnly(e.target.checked)} />*/}
+      {/*      베이스만 녹음(백킹 미재생)*/}
+      {/*    </label>*/}
+      {/*  </div>*/}
+      {/*</section>*/}
 
       {/* AMP (Accordion) */}
       {/* === AMP (Gain / Tone / Master) === */}
@@ -567,50 +600,73 @@ export default function PracticeMixPage() {
 </Accordion>
 
       {/* 미리듣기 & 트랜스포트 */}
-      <section className="pmx-panel">
-        <h3>🎚 미리듣기 & 트랜스포트</h3>
-        <div className="mixer">
-          <div className="ch">
-            <div className="ch-title">Bass</div>
-            <div className="row">
-              <label className="row"><input type="checkbox" checked={playBass} onChange={e=>setPlayBass(e.target.checked)} /> 재생</label>
-            </div>
-            <div className="col">
-              <input type="range" min={0} max={1} step={0.01} value={bassVol} onChange={e=>setBassVol(Number(e.target.value))}/>
-              <div className="hint">볼륨 {Math.round(bassVol*100)}%</div>
-            </div>
-            <div className="preview">
-              {(bassTrimUrl || blobUrl)
-                ? <audio ref={bassEl} src={(bassTrimUrl ?? blobUrl)!} preload="metadata" controls
-                         onLoadedMetadata={syncVolumesAndMutes}
-                         onPlay={syncVolumesAndMutes}
-                         onError={(e)=>console.warn('Bass audio error', e)} />
-                : <div className="thin">녹음 후 재생 가능</div>}
-              {bassTrimUrl && <div className="tiny" style={{marginTop:4}}>※ 카운트인 {COUNTIN_BEATS}박 구간을 자동 제거했습니다.</div>}
-            </div>
-          </div>
-        </div>
+      {/* ✅ 여기는 기존 ‘미리듣기 & 트랜스포트’ 섹션 자리를 통째로 교체 */}
+<section className="pmx-panel">
+  <h3>🎚 베이스 녹음 & 트랜스포트</h3>
 
-        <div className="transport" style={{marginTop:12}}>
-          <button className="btn" onClick={playing ? pause : play} disabled={!midiAudioUrl && !bassTrimUrl && !blobUrl}>
-            {playing ? '⏸ 일시정지 (Space)' : '▶︎ 재생 (Space)'}
-          </button>
-          <button className="btn" onClick={stopAll}>⏹ 정지</button>
-          <label className="row" style={{gap:8}}>
-            <input
-              aria-label="seek"
-              type="range" min={0} max={Math.max(duration || totalFromCues, 0.001)} step={0.01}
-              value={position} onChange={e => seek(Number(e.target.value))}
-              style={{width:360}}
-            />
-            <span className="hint">{formatTime(position)} / {formatTime(Math.max(duration, totalFromCues))}</span>
-          </label>
-          <label className="row" style={{gap:6}}>
-            <input type="checkbox" checked={loop} onChange={e=>setLoop(e.target.checked)} />
-            <span className="hint">루프</span>
-          </label>
-        </div>
-      </section>
+  {/* 녹음 컨트롤을 트랜스포트 상단에 통합 */}
+  <div className="row" style={{ gap: 12, alignItems: 'center', marginBottom: 8 }}>
+    {!recording ? (
+      <button className="btn primary" onClick={startRecordingFromTransport}>
+        ● 녹음 시작 (카운트인 {COUNTIN_BEATS}박)
+      </button>
+    ) : (
+      <button className="btn danger" onClick={stopRecordingAndPlayback}>
+        ■ 정지(녹음 + 재생)
+      </button>
+    )}
+    <label className="row" style={{ gap: 6 }}>
+      <input
+        type="checkbox"
+        checked={bassOnly}
+        onChange={(e) => setBassOnly(e.target.checked)}
+      />
+      베이스만 녹음(백킹 미재생)
+    </label>
+  </div>
+
+  <div className="transport" style={{ marginTop: 12 }}>
+    <button
+      className="btn"
+      onClick={playing ? pause : play}
+      disabled={!midiAudioUrl && !bassTrimUrl && !blobUrl}
+    >
+      {playing ? '⏸ 일시정지 (Space)' : '▶︎ 재생 (Space)'}
+    </button>
+    <button className="btn" onClick={stopAll}>⏹ 정지</button>
+    <label className="row" style={{ gap: 8 }}>
+      <input
+        aria-label="seek"
+        type="range"
+        min={0}
+        max={Math.max(duration || totalFromCues, 0.001)}
+        step={0.01}
+        value={position}
+        onChange={(e) => seek(Number(e.target.value))}
+        style={{ width: 360 }}
+      />
+      <span className="hint">
+        {formatTime(position)} / {formatTime(Math.max(duration, totalFromCues))}
+      </span>
+    </label>
+    <label className="row" style={{ gap: 6 }}>
+      <input type="checkbox" checked={loop} onChange={(e) => setLoop(e.target.checked)} />
+      <span className="hint">루프</span>
+    </label>
+  </div>
+  {/* 실시간 파형(스크롤) 미리보기: 녹음 중에만 진행 */}
+  <div style={{ marginTop: 16 }}>
+    <ScrollRecordWave
+  mediaStream={recordStream ?? undefined}
+  running={recording}
+  theme="light"
+  height={120}
+  seconds={80}     // 화면에 보이는 최근 구간(초)
+  pxPerSec={80}    // 스크롤 속도(px/s) — 원하는 대로 조절
+  clearOnStart     // 새 녹음 시작 시 파형 초기화
+/>
+  </div>
+</section>
 
       {/* 합치기 & 다운로드 */}
       <section className="pmx-panel">
